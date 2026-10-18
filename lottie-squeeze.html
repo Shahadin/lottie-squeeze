@@ -517,21 +517,28 @@ function hasAlpha(ctx, w, h) {
   for (let i = 3; i < d.length; i += 4) if (d[i] !== 255) return true;
   return false;
 }
-// Decode a candidate and measure it against the pixels it should reproduce
+// Decode a candidate and measure it against the pixels it should reproduce.
+// psnr: peak signal-to-noise ratio over visible pixels (higher is closer; ~40 dB looks identical, below ~25 dB shows damage)
 async function imageError(refCtx, w, h, candidateUrl) {
   const img = await loadImg(candidateUrl);
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, w, h);
   const a = refCtx.getImageData(0, 0, w, h).data, b = x.getImageData(0, 0, w, h).data;
-  let alphaMax = 0, alphaChanged = 0, colorSum = 0, colorWeight = 0;
+  let alphaMax = 0, alphaChanged = 0, colorSum = 0, sqSum = 0, colorWeight = 0;
   for (let i = 0; i < a.length; i += 4) {
     const da = Math.abs(a[i + 3] - b[i + 3]);
     if (da > alphaMax) alphaMax = da;
     if (da > 2) alphaChanged++;
     const wgt = a[i + 3] / 255;   // colour only matters where the pixel is visible
-    if (wgt > 0) { colorSum += wgt * (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2])) / 3; colorWeight += wgt; }
+    if (wgt > 0) {
+      const dr = a[i] - b[i], dg = a[i + 1] - b[i + 1], db = a[i + 2] - b[i + 2];
+      colorSum += wgt * (Math.abs(dr) + Math.abs(dg) + Math.abs(db)) / 3;
+      sqSum += wgt * (dr * dr + dg * dg + db * db) / 3;
+      colorWeight += wgt;
+    }
   }
-  return { alphaMax, alphaChanged, colorMean: colorWeight ? colorSum / colorWeight : 0 };
+  const mse = colorWeight ? sqSum / colorWeight : 0;
+  return { alphaMax, alphaChanged, colorMean: colorWeight ? colorSum / colorWeight : 0, psnr: mse === 0 ? Infinity : 10 * Math.log10(65025 / mse) };
 }
 
 /* ---------- optimizer ---------- */
@@ -686,36 +693,60 @@ function mergeDuplicateAssets(anim, stats, hasExpr) {
 // - resolution is relative to the asset's display size, so repeating a pass never shrinks an image again
 // - images that are already JPEG/WebP are left alone unless resized or the user asks to re-compress them
 // - transparent images never become JPEG
-// - a candidate is committed only if it is smaller, keeps the alpha channel, and stays within the colour error limit
-const IMG_MAX_COLOR_ERR = 12;   // mean error per visible pixel, 0–255 scale
+// - a candidate is committed only if it is smaller, keeps the alpha channel exactly, and meets the quality floor
+//   (o.minPsnr). If the chosen quality misses the floor, higher qualities are tried; if none passes, the original stays.
+const IMG_DEFAULT_MIN_PSNR = 24;   // without a preset: only catches broken results
+const IMAGE_STAT_KEYS = ['images', 'imgBefore', 'imgAfter', 'imgSkipped', 'imgRejected', 'imgNotSmaller', 'imgFailed', 'alphaProtected', 'imgWorstColor', 'imgWorstPsnr'];
+const imageCache = new Map();   // image data -> (settings -> result): moving a slider doesn't re-encode unchanged images
+async function processImage(p, assetW, o) {
+  const r = { p: null, counts: {} }, inc = k => { r.counts[k] = (r.counts[k] || 0) + 1; };
+  const srcFmt = ((p.match(/^data:image\/([a-z0-9.+-]+)/i) || [])[1] || '').toLowerCase().replace('jpg', 'jpeg');
+  let img;
+  try { img = await loadImg(p); } catch { inc('imgFailed'); return r; }
+  const nw = img.naturalWidth, nh = img.naturalHeight;
+  const k = Math.min(1, ((assetW || nw) * o.iscale) / nw);
+  const w = Math.max(1, Math.round(nw * k)), h = Math.max(1, Math.round(nh * k));
+  const resize = w < nw;
+  if (o.ifmt === 'keep' && !resize) return r;
+  if ((srcFmt === 'jpeg' || srcFmt === 'webp') && !resize && !o.reencode) { inc('imgSkipped'); return r; }
+
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0, w, h);
+  const alpha = hasAlpha(ctx, w, h);
+  let fmt = o.ifmt === 'keep' ? (srcFmt === 'jpeg' || srcFmt === 'webp' ? srcFmt : 'png') : o.ifmt;
+  if (fmt === 'auto') fmt = alpha ? 'webp' : 'jpeg';
+  if (fmt === 'jpeg' && alpha) { fmt = 'webp'; inc('alphaProtected'); }
+  const minPsnr = o.minPsnr != null ? o.minPsnr : IMG_DEFAULT_MIN_PSNR;
+  const qualities = fmt === 'png' ? [1] : [o.iq, ...[0.7, 0.8, 0.9, 0.95].filter(q => q > o.iq + 1e-9)];
+  let smaller = false;
+  for (const q of qualities) {
+    const out = encode(c, fmt, q, alpha);
+    if (alpha && out.startsWith('data:image/jpeg')) break;   // this browser can't keep transparency in that format
+    if (out.length >= p.length) break;                        // higher qualities only get bigger
+    smaller = true;
+    let err;
+    try { err = await imageError(ctx, w, h, out); } catch { break; }
+    if (err.alphaMax > 2) break;
+    if (err.psnr >= minPsnr) { r.p = out; r.colorMean = err.colorMean; r.psnr = err.psnr; return r; }
+  }
+  inc(smaller ? 'imgRejected' : 'imgNotSmaller');
+  return r;
+}
 async function recompressImages(anim, o, stats) {
+  const settings = [o.ifmt, o.iq, o.iscale, !!o.reencode, o.minPsnr != null ? o.minPsnr : ''].join('|');
   for (const a of anim.assets || []) {
     if (typeof a.p !== 'string' || !a.p.startsWith('data:image') || a.p.startsWith('data:image/svg')) continue;
-    const srcFmt = ((a.p.match(/^data:image\/([a-z0-9.+-]+)/i) || [])[1] || '').toLowerCase().replace('jpg', 'jpeg');
-    let img;
-    try { img = await loadImg(a.p); } catch { stats.imgFailed++; continue; }
-    const nw = img.naturalWidth, nh = img.naturalHeight;
-    const k = Math.min(1, ((a.w || nw) * o.iscale) / nw);
-    const w = Math.max(1, Math.round(nw * k)), h = Math.max(1, Math.round(nh * k));
-    const resize = w < nw;
-    if (o.ifmt === 'keep' && !resize) continue;
-    if ((srcFmt === 'jpeg' || srcFmt === 'webp') && !resize && !o.reencode) { stats.imgSkipped++; continue; }
-
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0, w, h);
-    const alpha = hasAlpha(ctx, w, h);
-    let fmt = o.ifmt === 'keep' ? (srcFmt === 'jpeg' || srcFmt === 'webp' ? srcFmt : 'png') : o.ifmt;
-    if (fmt === 'auto') fmt = alpha ? 'webp' : 'jpeg';
-    if (fmt === 'jpeg' && alpha) { fmt = 'webp'; stats.alphaProtected++; }
-    const out = encode(c, fmt, o.iq, alpha);
-    if (alpha && out.startsWith('data:image/jpeg')) { stats.imgRejected++; continue; }
-    if (out.length >= a.p.length) { stats.imgNotSmaller++; continue; }
-    let err;
-    try { err = await imageError(ctx, w, h, out); } catch { stats.imgRejected++; continue; }
-    if (err.alphaMax > 2 || err.colorMean > IMG_MAX_COLOR_ERR) { stats.imgRejected++; continue; }
-    stats.imgBefore += a.p.length; stats.imgAfter += out.length; stats.images++;
-    stats.imgWorstColor = Math.max(stats.imgWorstColor, err.colorMean);
-    a.p = out; a.e = 1; if (a.u == null) a.u = '';
+    let byImage = imageCache.get(a.p);
+    if (!byImage) { byImage = new Map(); imageCache.set(a.p, byImage); if (imageCache.size > 200) imageCache.delete(imageCache.keys().next().value); }
+    const key = settings + '|' + (a.w || '');
+    let r = byImage.get(key);
+    if (!r) { r = await processImage(a.p, a.w, o); byImage.set(key, r); }
+    for (const k in r.counts) stats[k] += r.counts[k];
+    if (r.p) {
+      stats.imgBefore += a.p.length; stats.imgAfter += r.p.length; stats.images++;
+      stats.imgWorstColor = Math.max(stats.imgWorstColor, r.colorMean); stats.imgWorstPsnr = Math.min(stats.imgWorstPsnr, r.psnr);
+      a.p = r.p; a.e = 1; if (a.u == null) a.u = '';
+    }
   }
 }
 
@@ -742,9 +773,9 @@ function childKind(key, val, parent, kind) {
 }
 function cleanTree(node, o, hasExpr, stats) {
   const geomF = Math.pow(10, o.prec), safeF = Math.pow(10, Math.max(o.prec, 3));
-  const dropMeta = o.meta && !hasExpr, dropNames = o.names && !hasExpr;
+  const dropMeta = o.meta && !hasExpr, dropNames = o.names && !hasExpr, rounding = o.round !== false;
   const round = (v, kind) => {
-    if (kind === 'time' || Number.isInteger(v)) return v;
+    if (!rounding || kind === 'time' || Number.isInteger(v)) return v;
     const f = kind === 'geom' ? geomF : safeF;
     const r = Math.round(v * f) / f;
     if (r !== v) stats.rounded++;
@@ -771,21 +802,107 @@ function cleanTree(node, o, hasExpr, stats) {
   return rec(node, 'safe');
 }
 
-async function optimizeLottie(src, o) {
-  const stats = { hidden: 0, hiddenShapes: 0, hiddenKept: 0, hiddenSkipped: '', assets: 0, images: 0, imgBefore: 0, imgAfter: 0,
-    imgSkipped: 0, imgRejected: 0, imgNotSmaller: 0, imgFailed: 0, alphaProtected: 0, imgWorstColor: 0, rounded: 0, metaKeys: 0, nameKeys: 0, meta: false,
+function newStats() {
+  return { hidden: 0, hiddenShapes: 0, hiddenKept: 0, hiddenSkipped: '', assets: 0, images: 0, imgBefore: 0, imgAfter: 0,
+    imgSkipped: 0, imgRejected: 0, imgNotSmaller: 0, imgFailed: 0, alphaProtected: 0, imgWorstColor: 0, imgWorstPsnr: Infinity, rounded: 0, metaKeys: 0, nameKeys: 0, meta: false,
     kfStatic: 0, kfRemoved: 0, kfTrimmed: 0, kfSkipped: '', dupAssets: 0 };
-  let a = clone(src);
-  const hasExpr = detectExpressions(a);
+}
+// Pure data steps. They also run inside the background worker, which is built from these same functions.
+function optimizeStructure(a, o, stats, hasExpr) {
   if (o.meta && a.meta) { delete a.meta; stats.meta = true; }   // export info block: never read by players
   if (o.hidden) removeHidden(a, stats, hasExpr);
   if (o.unused) removeUnusedAssets(a, stats);
   if (o.dedupe) mergeDuplicateAssets(a, stats, hasExpr);          // before images, so each image is encoded once
   if (o.kf) optimizeKeyframes(a, stats, hasExpr);
-  await recompressImages(a, o, stats);
+}
+function optimizeFinish(a, o, stats, hasExpr) {
   a = cleanTree(a, o, hasExpr, stats);
   if (o.dedupe) mergeDuplicateAssets(a, stats, hasExpr);          // assets that became identical in the output
+  return a;
+}
+async function optimizeLottie(src, o) {
+  const stats = newStats();
+  let a = clone(src);
+  const hasExpr = detectExpressions(a);
+  optimizeStructure(a, o, stats, hasExpr);
+  await recompressImages(a, o, stats);   // needs a canvas: always on the page itself
+  a = optimizeFinish(a, o, stats, hasExpr);
   return { anim: a, text: JSON.stringify(a), stats, hasExpr };
+}
+
+/* ---------- background worker ----------
+   Runs optimizeStructure/optimizeFinish off the page so large files don't freeze it. It is assembled from the
+   very same function sources, so its output is identical to optimizeLottie(); images are handed back to the
+   page for re-encoding. If workers are unavailable the page runs optimizeLottie() itself. */
+function workerSource() {
+  const arrows = { clone, sameValue, flatSegment, isKeyframed };
+  const fns = [detectExpressions, layerDependencies, hasLayerControl, removeHidden, removeUnusedAssets, staticValue, optimizeKeyframes,
+    mergeDuplicateAssets, childKind, cleanTree, newStats, optimizeStructure, optimizeFinish];
+  const sets = { TIME_KEYS, COLOR_TY, META_KEYS, NAME_KEYS };
+  return [
+    ...Object.entries(arrows).map(([n, f]) => `const ${n} = ${f};`),
+    ...Object.entries(sets).map(([n, v]) => `const ${n} = new Set(${JSON.stringify([...v])});`),
+    ...fns.map(String),
+    `(${workerMain})();`
+  ].join('\n');
+}
+function workerMain() {
+  let pending = null;
+  const finish = () => {
+    const { a, stats, hasExpr, o, job } = pending; pending = null;
+    const out = optimizeFinish(a, o, stats, hasExpr);
+    self.postMessage({ type: 'done', job, text: JSON.stringify(out), stats, hasExpr });
+  };
+  self.onmessage = e => {
+    const m = e.data;
+    try {
+      if (m.type === 'start') {
+        const a = JSON.parse(m.input), stats = newStats(), hasExpr = detectExpressions(a);
+        optimizeStructure(a, m.o, stats, hasExpr);
+        pending = { a, stats, hasExpr, o: m.o, job: m.job };
+        const imgs = (a.assets || []).map((x, i) => ({ i, p: x.p, w: x.w })).filter(x => typeof x.p === 'string' && x.p.startsWith('data:image') && !x.p.startsWith('data:image/svg'));
+        if (imgs.length) self.postMessage({ type: 'images', job: m.job, assets: imgs }); else finish();
+      } else if (m.type === 'images-done' && pending && pending.job === m.job) {
+        for (const r of m.results) { const as = pending.a.assets[r.i]; as.p = r.p; as.e = 1; if (as.u == null) as.u = ''; }
+        Object.assign(pending.stats, m.stats);
+        finish();
+      }
+    } catch (err) { self.postMessage({ type: 'error', job: m.job, message: String(err && err.message || err) }); }
+  };
+}
+let optWorker = null, workerUrl = null, workerBroken = false, workerReject = null;
+function getWorker() {
+  if (workerBroken || typeof Worker === 'undefined') return null;
+  if (!optWorker) {
+    try { workerUrl = workerUrl || URL.createObjectURL(new Blob([workerSource()], { type: 'text/javascript' })); optWorker = new Worker(workerUrl); }
+    catch { workerBroken = true; return null; }
+  }
+  return optWorker;
+}
+function cancelWorker() {   // stop an outdated job outright instead of letting it finish
+  if (optWorker) { optWorker.terminate(); optWorker = null; }
+  if (workerReject) { workerReject(new Error('cancelled')); workerReject = null; }
+}
+function optimizeInWorker(text, o, job) {
+  return new Promise((resolve, reject) => {
+    const w = getWorker();
+    if (!w) return reject(new Error('worker unavailable'));
+    workerReject = reject;
+    w.onmessage = async e => {
+      const m = e.data;
+      if (m.job !== job) return;
+      if (m.type === 'images') {
+        const list = m.assets.map(x => ({ p: x.p, w: x.w })), s = newStats();
+        await recompressImages({ assets: list }, o, s);
+        if (optWorker !== w) return;   // cancelled while images were encoding
+        const changed = list.map((x, k) => ({ i: m.assets[k].i, p: x.p, from: m.assets[k].p })).filter(x => x.p !== x.from).map(({ i, p }) => ({ i, p }));
+        w.postMessage({ type: 'images-done', job, results: changed, stats: Object.fromEntries(IMAGE_STAT_KEYS.map(k => [k, s[k]])) });
+      } else if (m.type === 'done') { workerReject = null; resolve(m); }
+      else if (m.type === 'error') { workerReject = null; reject(new Error(m.message)); }
+    };
+    w.onerror = e => { workerBroken = true; optWorker = null; workerReject = null; reject(new Error('worker failed: ' + (e.message || 'unknown'))); };
+    w.postMessage({ type: 'start', job, input: text, o });
+  });
 }
 
 /* ---------- .lottie (dotLottie zip) reader ---------- */
