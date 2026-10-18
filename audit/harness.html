@@ -8,10 +8,11 @@
 <script>
 /* The harness drives the REAL app: optimizeLottie, readDotLottie etc. are called inside the iframe.
    ?app=baseline loads the protected pre-upgrade copy so before/after use identical fixtures. */
-const APP_VERSION = new URLSearchParams(location.search).get('app') === 'baseline' ? 'baseline' : 'current';
+const APP_FILES = { baseline: '../baseline/lottie-squeeze-standalone.baseline.html', phase1: '../baseline/lottie-squeeze-standalone.phase1.html', current: '../lottie-squeeze-standalone.html' };
+const APP_VERSION = APP_FILES[new URLSearchParams(location.search).get('app')] ? new URLSearchParams(location.search).get('app') : 'current';
 const app = () => document.getElementById('app').contentWindow;
 const appReady = new Promise(r => document.getElementById('app').addEventListener('load', () => setTimeout(r, 800)));
-document.getElementById('app').src = (APP_VERSION === 'baseline' ? '../baseline/lottie-squeeze-standalone.baseline.html' : '../lottie-squeeze-standalone.html') + '?nocache=' + Date.now();
+document.getElementById('app').src = APP_FILES[APP_VERSION] + '?nocache=' + Date.now();
 
 /* ---------- seeded random so fixtures are reproducible ---------- */
 let seed = 1337;
@@ -196,5 +197,5 @@ window.runAll = async function () {
   return results.map(r => ({ ...r, outAnim: undefined }));
 };
 </script>
-<script>document.write('<script src="harness-v2.js?nocache=' + Date.now() + '"><\/script>');</script>
+<script>document.write('<script src="harness-v2.js?nocache=' + Date.now() + '"><\/script><script src="harness-phase2.js?nocache=' + Date.now() + '"><\/script>');</script>
 </body></html>

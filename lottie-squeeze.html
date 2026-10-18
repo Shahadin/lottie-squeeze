@@ -258,6 +258,8 @@ details.log[open] summary::after { content: "−"; }
           <label class="toggle"><span><b>Remove layer names</b><small class="warnline">Breaks keypaths, dynamic colours and code that finds layers by name.</small></span><input type="checkbox" class="switch" id="opt-names"></label>
           <label class="toggle"><span><b>Remove hidden layers</b><small>Kept when other layers or expressions could use them.</small></span><input type="checkbox" class="switch" id="opt-hidden" checked></label>
           <label class="toggle"><span><b>Remove unused assets</b><small>Precomps and images nothing uses.</small></span><input type="checkbox" class="switch" id="opt-unused" checked></label>
+          <label class="toggle"><span><b>Optimize keyframes</b><small>Drops keyframes that change nothing. Values stay identical at every frame.</small></span><input type="checkbox" class="switch" id="opt-kf" checked></label>
+          <label class="toggle"><span><b>Merge duplicate assets</b><small>Identical images and precomps are stored once.</small></span><input type="checkbox" class="switch" id="opt-dedupe" checked></label>
         </div>
         <div class="group">
           <h2>Embedded images</h2>
@@ -293,7 +295,7 @@ details.log[open] summary::after { content: "−"; }
     <div class="card stage">
       <div class="metrics" aria-live="polite">
         <div class="metric"><span id="o-before-label">Original</span><b id="o-before">–</b></div>
-        <div class="metric"><span>Optimized</span><b id="o-after">–</b></div>
+        <div class="metric"><span id="o-after-label">Optimized</span><b id="o-after">–</b></div>
         <div class="metric win"><span id="o-saved-label">Saved</span><b id="o-saved">–</b></div>
         <div class="metric"><span id="o-gzip-label">Gzipped</span><b id="o-gzip">–</b></div>
       </div>
@@ -304,7 +306,8 @@ details.log[open] summary::after { content: "−"; }
       <div class="foot">
         <span class="status" id="o-status">Working on the example…</span>
         <div class="actions">
-          <button class="btn primary" id="o-dl" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>Download .json</button>
+          <button class="btn ghost" id="o-dl" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>.json</button>
+          <button class="btn primary" id="o-dl-lottie" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>.lottie</button>
         </div>
       </div>
       <details class="log"><summary>What changed</summary><ul id="o-log"><li>Nothing yet</li></ul></details>
@@ -459,14 +462,20 @@ async function gzipSize(str) {
 
 /* ---------- downloads (artifact capability, falls back to a normal link) ---------- */
 const downloadsP = (window.claude && typeof claude.use === 'function') ? claude.use('downloads').catch(() => null) : Promise.resolve(null);
-async function saveJSON(filename, text, statusEl) {
-  const blob = new Blob([text], { type: 'application/json' });
+async function saveJSON(filename, text, statusEl) { return saveFile(filename, new Blob([text], { type: 'application/json' }), statusEl); }
+async function saveFile(filename, blob, statusEl) {
   const d = await downloadsP;
   if (d) {
-    try { await d.save({ filename, data: blob }); setStatus(statusEl, 'Saved ' + filename, 'ok'); return; }
+    try { await d.save({ filename, data: blob }); setStatus(statusEl, 'Saved ' + filename, 'ok'); return true; }
     catch (e) {
-      if (e && e.code === 'declined') { setStatus(statusEl, 'Download cancelled.'); return; }
-      if (e && e.code === 'rate_limited') { setStatus(statusEl, 'A save prompt is already open.', 'warn'); return; }
+      if (e && e.code === 'declined') { setStatus(statusEl, 'Download cancelled.'); return false; }
+      if (e && e.code === 'rate_limited') { setStatus(statusEl, 'A save prompt is already open.', 'warn'); return false; }
+      // the hosted viewer only saves known extensions; a .lottie is a zip, so offer it under that name
+      if (e && e.code === 'rejected_extension' && /\.lottie$/.test(filename)) {
+        const ok = await saveFile(filename + '.zip', blob, statusEl);
+        if (ok) setStatus(statusEl, 'Saved ' + filename + '.zip. Remove the .zip ending to use it.', 'ok');
+        return ok;
+      }
     }
   }
   const url = URL.createObjectURL(blob);
@@ -474,6 +483,7 @@ async function saveJSON(filename, text, statusEl) {
   a.href = url; a.download = filename; document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
   setStatus(statusEl, 'Downloaded ' + filename, 'ok');
+  return true;
 }
 function setStatus(el, text, kind) { el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : ''); }
 
@@ -603,6 +613,75 @@ function removeUnusedAssets(anim, stats) {
   stats.assets += before - anim.assets.length;
 }
 
+/* Keyframe optimization: only changes that keep every value identical at every moment.
+   - an animated property whose keyframes all hold the same value, with no spatial curve, becomes static
+   - a keyframe whose neighbours hold the same value (no spatial curve on either side) is dropped
+   - easing and spatial tangents on the final keyframe, which belong to no segment, are dropped
+   Not run when the file has expressions: numKeys, key() and nearestKey() can read keyframes directly.
+   Time remap and old-style keyframes (with "e" end values) are left alone. */
+const sameValue = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const flatSegment = kf => [kf.to, kf.ti].every(v => v == null || (Array.isArray(v) && v.every(n => n === 0)));
+const isKeyframed = p => p && typeof p === 'object' && !Array.isArray(p) && p.a === 1 && Array.isArray(p.k) && p.k.length > 0 &&
+  p.k.every(kf => kf && typeof kf === 'object' && !Array.isArray(kf) && typeof kf.t === 'number' && 's' in kf && !('e' in kf));
+function staticValue(s) {
+  if (!Array.isArray(s)) return s;
+  return s.length === 1 && (typeof s[0] === 'number' || (s[0] && typeof s[0] === 'object' && !Array.isArray(s[0]))) ? s[0] : s;
+}
+function optimizeKeyframes(anim, stats, hasExpr) {
+  if (hasExpr) { stats.kfSkipped = 'expressions'; return; }
+  (function walk(n) {
+    if (!n || typeof n !== 'object') return;
+    for (const key in n) {
+      const v = n[key];
+      if (key === 'tm') continue;
+      if (isKeyframed(v)) {
+        const k = v.k;
+        if (k.every(kf => sameValue(kf.s, k[0].s) && flatSegment(kf))) {
+          n[key] = Object.assign({}, v, { a: 0, k: staticValue(k[0].s) });
+          stats.kfStatic++; stats.kfRemoved += k.length;
+          continue;
+        }
+        const kept = [k[0]];
+        for (let i = 1; i < k.length - 1; i++) {
+          const prev = kept[kept.length - 1];
+          if (sameValue(prev.s, k[i].s) && sameValue(k[i].s, k[i + 1].s) && flatSegment(prev) && flatSegment(k[i])) { stats.kfRemoved++; continue; }
+          kept.push(k[i]);
+        }
+        if (k.length > 1) kept.push(k[k.length - 1]);
+        const last = kept[kept.length - 1];
+        if (kept.length > 1 && ['i', 'o', 'to', 'ti'].some(f => f in last)) {
+          kept[kept.length - 1] = Object.fromEntries(Object.entries(last).filter(([f]) => !['i', 'o', 'to', 'ti'].includes(f)));
+          stats.kfTrimmed++;
+        }
+        v.k = kept;
+        continue;
+      }
+      walk(v);
+    }
+  })(anim);
+}
+
+/* Merge assets whose content is identical (ignoring id and label), and point every layer at the one kept.
+   Repeats so precomps that become identical after their images merge are merged too.
+   Not run with expressions (comp("name") lookups) or when glyph/slot data could reference assets. */
+function mergeDuplicateAssets(anim, stats, hasExpr) {
+  if (hasExpr || !Array.isArray(anim.assets) || anim.assets.length < 2) return;
+  if (anim.slots || (Array.isArray(anim.chars) && anim.chars.length)) return;
+  for (;;) {
+    const seen = new Map(), remap = new Map();
+    for (const a of anim.assets) {
+      const { id, nm, ...content } = a;
+      const key = JSON.stringify(content);
+      if (seen.has(key)) remap.set(id, seen.get(key)); else seen.set(key, id);
+    }
+    if (!remap.size) return;
+    const repoint = layers => (layers || []).forEach(l => { if (remap.has(l.refId)) l.refId = remap.get(l.refId); });
+    repoint(anim.layers); anim.assets.forEach(a => repoint(a.layers));
+    anim.assets = anim.assets.filter(a => !remap.has(a.id));
+    stats.dupAssets += remap.size;
+  }
+}
+
 // Image policy:
 // - resolution is relative to the asset's display size, so repeating a pass never shrinks an image again
 // - images that are already JPEG/WebP are left alone unless resized or the user asks to re-compress them
@@ -694,14 +773,18 @@ function cleanTree(node, o, hasExpr, stats) {
 
 async function optimizeLottie(src, o) {
   const stats = { hidden: 0, hiddenShapes: 0, hiddenKept: 0, hiddenSkipped: '', assets: 0, images: 0, imgBefore: 0, imgAfter: 0,
-    imgSkipped: 0, imgRejected: 0, imgNotSmaller: 0, imgFailed: 0, alphaProtected: 0, imgWorstColor: 0, rounded: 0, metaKeys: 0, nameKeys: 0, meta: false };
+    imgSkipped: 0, imgRejected: 0, imgNotSmaller: 0, imgFailed: 0, alphaProtected: 0, imgWorstColor: 0, rounded: 0, metaKeys: 0, nameKeys: 0, meta: false,
+    kfStatic: 0, kfRemoved: 0, kfTrimmed: 0, kfSkipped: '', dupAssets: 0 };
   let a = clone(src);
   const hasExpr = detectExpressions(a);
   if (o.meta && a.meta) { delete a.meta; stats.meta = true; }   // export info block: never read by players
   if (o.hidden) removeHidden(a, stats, hasExpr);
   if (o.unused) removeUnusedAssets(a, stats);
+  if (o.dedupe) mergeDuplicateAssets(a, stats, hasExpr);          // before images, so each image is encoded once
+  if (o.kf) optimizeKeyframes(a, stats, hasExpr);
   await recompressImages(a, o, stats);
   a = cleanTree(a, o, hasExpr, stats);
+  if (o.dedupe) mergeDuplicateAssets(a, stats, hasExpr);          // assets that became identical in the output
   return { anim: a, text: JSON.stringify(a), stats, hasExpr };
 }
 
@@ -714,7 +797,7 @@ async function readDotLottie(file) {
   if (manifest) {
     const m = JSON.parse(await manifest.async('string'));
     const first = m.animations && m.animations[0];
-    if (first) animPath = Object.keys(zip.files).find(p => p.match(new RegExp('^(a|animations)/' + first.id + '\\.json$')));
+    if (first) animPath = Object.keys(zip.files).find(p => p === 'animations/' + first.id + '.json' || p === 'a/' + first.id + '.json');
   }
   if (!animPath) animPath = Object.keys(zip.files).find(p => /^(a|animations)\/.+\.json$/.test(p));
   if (!animPath) throw new Error('no animation found inside the .lottie file');
@@ -725,11 +808,34 @@ async function readDotLottie(file) {
     const entry = Object.keys(zip.files).find(p => /^(i|images)\//.test(p) && p.endsWith('/' + name));
     if (!entry) continue;
     const ext = name.split('.').pop().toLowerCase();
-    const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'svg' ? 'image/svg+xml' : 'image/png';
+    const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'svg' ? 'image/svg+xml' : ext === 'gif' ? 'image/gif' : 'image/png';
     asset.p = `data:${mime};base64,` + await zip.file(entry).async('base64');
     asset.u = ''; asset.e = 1;
   }
   return anim;
+}
+
+/* ---------- .lottie (dotLottie v1) writer ----------
+   manifest.json + animations/<id>.json + images/<file>. Embedded images move out of the JSON into their own
+   files (stored, not re-zipped: they are already compressed); the JSON is deflated. This is packaging only:
+   it does not change any animation data or pixels. */
+const IMG_EXT = { png: 'png', jpeg: 'jpg', jpg: 'jpg', webp: 'webp', gif: 'gif', 'svg+xml': 'svg' };
+async function buildDotLottie(anim, id = 'animation') {
+  if (!window.JSZip) throw new Error('zip support failed to load');
+  const a = clone(anim), zip = new JSZip(), used = new Set(), deflate = { compression: 'DEFLATE', compressionOptions: { level: 9 } };
+  zip.file('manifest.json', JSON.stringify({ version: '1', generator: 'Lottie Squeeze', author: '', revision: 1,
+    animations: [{ id, speed: 1, themeColor: '#ffffff', loop: true, autoplay: true, direction: 1, playMode: 'normal' }] }), deflate);
+  for (const asset of a.assets || []) {
+    const m = typeof asset.p === 'string' && asset.p.match(/^data:image\/([a-z0-9+.-]+);base64,(.*)$/i);
+    if (!m || !IMG_EXT[m[1].toLowerCase()]) continue;
+    let base = String(asset.id || 'image').replace(/[^\w.-]/g, '_'), name = base + '.' + IMG_EXT[m[1].toLowerCase()], n = 1;
+    while (used.has(name)) name = `${base}_${n++}.${IMG_EXT[m[1].toLowerCase()]}`;
+    used.add(name);
+    zip.file('images/' + name, m[2], { base64: true, compression: 'STORE' });
+    asset.u = '/images/'; asset.p = name; asset.e = 0;
+  }
+  zip.file('animations/' + id + '.json', JSON.stringify(a), deflate);
+  return zip.generateAsync({ type: 'blob', mimeType: 'application/zip' });
 }
 
 /* ---------- example animation (for the first view) ---------- */
@@ -779,7 +885,8 @@ let optSource = null, optName = 'sample-bounce.json', optResult = null, optRun =
 let optInput = null;   // { name, format: 'JSON' | 'dotLottie', bytes, text } — what the user actually gave us
 const optOpts = () => ({
   prec: +$('#opt-prec').value, meta: $('#opt-meta').checked, names: $('#opt-names').checked, hidden: $('#opt-hidden').checked, unused: $('#opt-unused').checked,
-  ifmt: $('#opt-ifmt').value, iq: +$('#opt-iq').value / 100, iscale: +$('#opt-iscale').value, reencode: $('#opt-reencode').checked
+  ifmt: $('#opt-ifmt').value, iq: +$('#opt-iq').value / 100, iscale: +$('#opt-iscale').value, reencode: $('#opt-reencode').checked,
+  kf: $('#opt-kf').checked, dedupe: $('#opt-dedupe').checked
 });
 const imageBytes = s => { let n = 0; const re = /"p":"(data:image[^"]*)"/g; let m; while ((m = re.exec(s))) n += m[1].length; return n; };
 
@@ -800,49 +907,59 @@ async function runOptimize() {
   if (!optSource) return;
   const run = ++optRun;
   setStatus($('#o-status'), 'Optimizing…');
-  $('#o-dl').disabled = true;
+  $('#o-dl').disabled = $('#o-dl-lottie').disabled = true;
   try {
     const r = await optimizeLottie(optSource, optOpts());
     if (run !== optRun) return;
     optResult = r;
-    const after = byteLen(r.text);
-    // like for like: a JSON file is compared with JSON output; a .lottie (zip) is compared through its JSON
+    // like for like: JSON input is compared with JSON output, .lottie input with .lottie output
     const isZip = optInput.format === 'dotLottie';
-    const before = isZip ? byteLen(optInput.minified) : optInput.bytes;
-    const pct = before ? (1 - after / before) * 100 : 0;
-    $('#o-after').textContent = fmtBytes(after);
-    $('#o-saved-label').textContent = isZip ? 'Saved vs its JSON' : 'Saved';
-    $('#o-saved').textContent = (pct >= 0 ? '' : '+') + Math.abs(pct).toFixed(1) + '%';
-    $('#o-pill').textContent = pct > 0 ? '−' + Math.round(pct) + '%' : '';
-    $('#o-gzip').textContent = '…'; $('#o-gzip-label').textContent = 'Gzipped';
-    Promise.all([gzipSize(isZip ? optInput.minified : optInput.text), gzipSize(r.text)]).then(([g0, g1]) => {
-      if (run !== optRun) return;
-      $('#o-gzip').textContent = g1 ? fmtBytes(g1) : 'n/a';
-      if (g0) $('#o-gzip-label').textContent = 'Gzipped · was ' + fmtBytes(g0);
-      renderLog(r, { before, after, g0, g1, isZip });
-    });
+    const z = { isZip, jsonBefore: byteLen(optInput.minified), jsonAfter: byteLen(r.text) };
+    $('#o-after-label').textContent = isZip ? 'Optimized · .lottie' : 'Optimized · JSON';
+    if (isZip) { $('#o-after').textContent = '…'; $('#o-saved').textContent = '…'; $('#o-pill').textContent = ''; }
+    else showSaved(optInput.bytes, z.jsonAfter);
+    $('#o-gzip').textContent = '…'; $('#o-gzip-label').textContent = 'Gzipped JSON';
     $('#o-meta2').textContent = metaText(r.anim);
     play('o-play2', r.anim);
-    renderLog(r, { before, after, isZip });
+    renderLog(r, z);
     $('#o-dl').disabled = false;
     const o = optOpts();
-    if (r.hasExpr && (o.meta || o.names || o.hidden)) setStatus($('#o-status'), 'This file uses expressions, so names, metadata and hidden layers were kept.', 'warn');
+    if (r.hasExpr && (o.meta || o.names || o.hidden || o.kf || o.dedupe)) setStatus($('#o-status'), 'This file uses expressions, so names, metadata, hidden layers, keyframes and duplicate assets were kept.', 'warn');
     else setStatus($('#o-status'), 'Ready. Compare both previews before downloading.', 'ok');
+
+    const [g0, g1, pkg] = await Promise.all([gzipSize(isZip ? optInput.minified : optInput.text), gzipSize(r.text), buildDotLottie(r.anim).catch(() => null)]);
+    if (run !== optRun) return;
+    Object.assign(z, { g0, g1, lottieAfter: pkg ? pkg.size : null });
+    r.dotLottie = pkg;
+    $('#o-gzip').textContent = g1 ? fmtBytes(g1) : 'n/a';
+    if (g0) $('#o-gzip-label').textContent = 'Gzipped JSON · was ' + fmtBytes(g0);
+    if (isZip) { $('#o-after').textContent = pkg ? fmtBytes(pkg.size) : 'n/a'; if (pkg) showSaved(optInput.bytes, pkg.size); }
+    $('#o-dl-lottie').disabled = !pkg;
+    renderLog(r, z);
   } catch (e) {
     if (run === optRun) setStatus($('#o-status'), 'Could not optimize: ' + e.message, 'warn');
   }
+}
+function showSaved(before, after) {
+  const pct = before ? (1 - after / before) * 100 : 0;
+  $('#o-after').textContent = fmtBytes(after);
+  $('#o-saved').textContent = (pct >= 0 ? '' : '+') + Math.abs(pct).toFixed(1) + '%';
+  $('#o-pill').textContent = pct > 0 ? '−' + Math.round(pct) + '%' : '';
 }
 
 function renderLog(r, z) {
   const s = r.stats, items = [];
   const inMin = optInput.minified, imgIn = imageBytes(inMin), imgOut = imageBytes(r.text);
-  items.push(['Input', `${optInput.format === 'dotLottie' ? '.lottie (zip)' : 'JSON'} · ${fmtBytes(optInput.bytes)}`]);
-  if (z.isZip) items.push(['Compared as', 'JSON (the .lottie export is not available yet)']);
-  items.push(['Minified JSON', fmtBytes(byteLen(inMin)) + ' → ' + fmtBytes(z.after)]);
+  items.push(['Input', `${z.isZip ? '.lottie (zip)' : 'JSON'} · ${fmtBytes(optInput.bytes)}`]);
+  items.push(['Minified JSON', fmtBytes(z.jsonBefore) + ' → ' + fmtBytes(z.jsonAfter)]);
   if (z.g0 && z.g1) items.push(['Gzipped JSON', fmtBytes(z.g0) + ' → ' + fmtBytes(z.g1)]);
-  items.push(['Animation data (without images)', fmtBytes(byteLen(inMin) - imgIn) + ' → ' + fmtBytes(z.after - imgOut)]);
+  items.push(['Animation data (without images)', fmtBytes(z.jsonBefore - imgIn) + ' → ' + fmtBytes(z.jsonAfter - imgOut)]);
   if (imgIn) items.push(['Embedded images', fmtBytes(imgIn) + ' → ' + fmtBytes(imgOut)]);
+  if (z.lottieAfter) items.push([z.isZip ? '.lottie package (zip)' : 'Same result packaged as .lottie (zip)', (z.isZip ? fmtBytes(optInput.bytes) + ' → ' : '') + fmtBytes(z.lottieAfter)]);
   items.push(['Numbers rounded (timing never rounded)', s.rounded.toLocaleString()]);
+  if (s.kfStatic || s.kfRemoved || s.kfTrimmed) items.push(['Keyframes removed / properties made static', s.kfRemoved + ' / ' + s.kfStatic]);
+  if (s.kfSkipped) items.push(['Keyframes', 'kept: file uses expressions']);
+  if (s.dupAssets) items.push(['Duplicate assets merged', s.dupAssets]);
   if (s.metaKeys || s.meta) items.push(['Editor metadata removed', s.metaKeys.toLocaleString() + (s.meta ? ' + export info' : '')]);
   if (s.nameKeys) items.push(['Layer names removed', s.nameKeys.toLocaleString()]);
   if (s.hidden || s.hiddenShapes) items.push(['Hidden layers / shapes removed', s.hidden + ' / ' + s.hiddenShapes]);
@@ -872,7 +989,7 @@ function precHint() {
 }
 function scheduleOptimize() { clearTimeout(optTimer); optTimer = setTimeout(runOptimize, 250); }
 ['#opt-prec', '#opt-iq'].forEach(id => $(id).addEventListener('input', () => { $(id + '-out').textContent = $(id).value; if (id === '#opt-prec') precHint(); scheduleOptimize(); }));
-['#opt-meta', '#opt-names', '#opt-hidden', '#opt-unused', '#opt-ifmt', '#opt-iscale', '#opt-reencode'].forEach(id => $(id).addEventListener('change', scheduleOptimize));
+['#opt-meta', '#opt-names', '#opt-hidden', '#opt-unused', '#opt-kf', '#opt-dedupe', '#opt-ifmt', '#opt-iscale', '#opt-reencode'].forEach(id => $(id).addEventListener('change', scheduleOptimize));
 precHint();
 
 async function handleLottieFile(file) {
@@ -897,6 +1014,10 @@ $('#o-dl').addEventListener('click', () => {
   if (!optResult) return;
   const base = optName.replace(/\.json$/i, '');
   saveJSON(base + '.min.json', optResult.text, $('#o-status'));
+});
+$('#o-dl-lottie').addEventListener('click', () => {
+  if (!optResult || !optResult.dotLottie) return;
+  saveFile(optName.replace(/\.json$/i, '') + '.lottie', optResult.dotLottie, $('#o-status'));
 });
 
 /* ================= VIDEO TAB ================= */

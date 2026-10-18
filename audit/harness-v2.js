@@ -52,14 +52,16 @@ function structCheck(orig, out, o) {
       if (l.tt && l.tp == null) { const si = s.layers.indexOf(sl); if (!(i > 0 && si > 0 && c.layers[i - 1].ind === s.layers[si - 1].ind)) problems.push(`${c.id}/${l.ind}: legacy matte source changed`); }
       for (const k of ['ip', 'op', 'st', 'sr', 'parent', 'tt', 'td', 'tp', 'ty', 'refId', 'hd']) if (sl[k] !== l[k]) problems.push(`${c.id}/${l.ind}: ${k} ${sl[k]} → ${l[k]}`);
       const A = collect(sl, true), B = collect(l, true);   // compare visible content on both sides
-      if (JSON.stringify(A.times) !== JSON.stringify(B.times)) problems.push(`${c.id}/${l.ind}: keyframe times changed`);
+      // keyframe optimization legitimately changes keyframe lists; it is verified by pixel isolation instead
+      if (!o.kf && JSON.stringify(A.times) !== JSON.stringify(B.times)) problems.push(`${c.id}/${l.ind}: keyframe times changed`);
+      info.keyframesBefore = (info.keyframesBefore || 0) + A.times.length; info.keyframesAfter = (info.keyframesAfter || 0) + B.times.length;
       if (sl.tm || l.tm) { const ta = (sl.tm.k || []).map(k => [k.t, k.s]), tb = (l.tm.k || []).map(k => [k.t, k.s]); if (JSON.stringify(ta) !== JSON.stringify(tb)) problems.push(`${c.id}/${l.ind}: time remap changed`); }
       if (JSON.stringify(A.exprs) !== JSON.stringify(B.exprs)) problems.push(`${c.id}/${l.ind}: expressions changed`);
       if (!o.names && JSON.stringify(A.names) !== JSON.stringify(B.names)) problems.push(`${c.id}/${l.ind}: names changed`);
       if (JSON.stringify(A.maskCl) !== JSON.stringify(B.maskCl)) problems.push(`${c.id}/${l.ind}: mask closed flag changed ${JSON.stringify(A.maskCl)} → ${JSON.stringify(B.maskCl)}`);
       const de = maxPairDiff(A.ease, B.ease), dc = maxPairDiff(A.colours, B.colours);
-      if (de === Infinity) problems.push(`${c.id}/${l.ind}: easing count changed`); else info.maxEaseDiff = Math.max(info.maxEaseDiff, de);
-      if (dc === Infinity) problems.push(`${c.id}/${l.ind}: colour count changed`); else info.maxColourDiff = Math.max(info.maxColourDiff, dc);
+      if (de === Infinity) { if (!o.kf) problems.push(`${c.id}/${l.ind}: easing count changed`); } else info.maxEaseDiff = Math.max(info.maxEaseDiff, de);
+      if (dc === Infinity) { if (!o.kf) problems.push(`${c.id}/${l.ind}: colour count changed`); } else info.maxColourDiff = Math.max(info.maxColourDiff, dc);
     });
   }
   let npBefore = 0, npAfter = 0;
@@ -76,6 +78,9 @@ async function canvasDiff(orig, opt) {
   const P1 = await loadPlayer(orig, size), P2 = await loadPlayer(opt, size);
   if (!P1.a || !P2.a || !P1.canvas || !P2.canvas) return { renders: false, errors: [...P1.errors, ...P2.errors] };
   const frames = Math.ceil(orig.op - orig.ip);
+  // warm-up: the first draw can happen before images finish decoding, and asking for the frame the player
+  // is already on does not redraw it; so draw frame 1, wait, and let the loop below redraw frame 0
+  frameData(P1, 1); frameData(P2, 1); await sleep(150);
   let worst = { f: -1, pctPx: 0, mean: 0 }, alphaMax = 0, alphaWorstPct = 0, sum = 0;
   for (let f = 0; f < frames; f++) {
     const d1 = frameData(P1, f), d2 = frameData(P2, f);
@@ -181,7 +186,12 @@ async function measure2(name, fx, o, label, opts = {}) {
   const canvas = await canvasDiff(fx, r.anim);
   const svg = opts.svg === false ? null : await svgDiff(fx, r.anim);
   const struct = structCheck(fx, r.anim, o);
-  return { test: name, settings: label, inBytes: bytes(minified), outBytes: bytes(r.text), savedPct: +((1 - bytes(r.text) / bytes(minified)) * 100).toFixed(1),
+  // each Phase 2 transformation must be pixel-exact on its own: compare with the same run minus that feature
+  const isolation = {};
+  for (const f of ['kf', 'dedupe']) if (o[f]) { const ref = await W.optimizeLottie(fx, { ...o, [f]: false }); const v = await canvasDiff(ref.anim, r.anim); isolation[f] = { pctPx: v.worst.pctPx, alphaMax: v.alphaMax, identical: ref.text === r.text }; }
+  let lottie = null;
+  if (typeof W.buildDotLottie === 'function') { const blob = await W.buildDotLottie(r.anim); const back = await W.readDotLottie(new File([blob], 'x.lottie')); lottie = { bytes: blob.size, roundTripIdentical: canon(back) === canon(r.anim) }; }
+  return { test: name, settings: label, isolation, lottie, inBytes: bytes(minified), outBytes: bytes(r.text), savedPct: +((1 - bytes(r.text) / bytes(minified)) * 100).toFixed(1),
     gzipIn: g0, gzipOut: g1, gzipSavedPct: +((1 - g1 / g0) * 100).toFixed(1), ms: +ms.toFixed(1), heapDeltaMB: heap0 != null ? +((heap1 - heap0) / 1048576).toFixed(1) : 'n/a',
     parses, canvas, svg, struct, stats: r.stats, outAnim: r.anim };
 }
@@ -333,13 +343,14 @@ window.runRegressions = async function () {
     for (const a of FX.images.assets) zip.file('images/' + a.id + '.png', a.p.split(',')[1], { base64: true });
     const file = new File([await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' })], 'test.lottie');
     const ui = id => W.document.getElementById(id) ? W.document.getElementById(id).textContent : '(missing)';
-    const waitReady = async () => { for (let i = 0; i < 100 && !/Ready|expressions/.test(ui('o-status')); i++) await sleep(50); await sleep(400); };
+    const waitReady = async () => { for (let i = 0; i < 100 && !/Ready|expressions/.test(ui('o-status')); i++) await sleep(50); for (let i = 0; i < 100 && /…/.test(ui('o-saved') + ui('o-after')); i++) await sleep(50); await sleep(200); };
     await W.handleLottieFile(file); await waitReady();
-    const zipView = { label: ui('o-before-label'), original: ui('o-before'), savedLabel: ui('o-saved-label'), saved: ui('o-saved'), gzipLabel: ui('o-gzip-label'), log: [...W.document.querySelectorAll('#o-log li')].map(li => li.textContent).slice(0, 4) };
+    const zipView = { label: ui('o-before-label'), original: ui('o-before'), afterLabel: ui('o-after-label'), after: ui('o-after'), savedLabel: ui('o-saved-label'), saved: ui('o-saved'), gzipLabel: ui('o-gzip-label'), log: [...W.document.querySelectorAll('#o-log li')].map(li => li.textContent).slice(0, 4) };
     const jsonText = JSON.stringify(FX.simple, null, 2); await W.handleLottieFile(new File([jsonText], 'pretty.json')); await waitReady();
     const jsonView = { label: ui('o-before-label'), original: ui('o-before'), fileBytes: new Blob([jsonText]).size, saved: ui('o-saved') };
-    const ok = /lottie/i.test(zipView.label) && /JSON/.test(zipView.savedLabel) && !zipView.saved.startsWith('+') && /JSON/.test(jsonView.label);
-    pass('R8', '.lottie input is labelled and compared JSON-to-JSON; JSON input shows the real file size', ok, { zipView, jsonView }); }
+    // Phase 1 compared a .lottie through its JSON; from Phase 2 it is compared with the exported .lottie. Either is like for like.
+    const ok = /lottie/i.test(zipView.label) && (/JSON/.test(zipView.savedLabel) || /lottie/i.test(zipView.afterLabel)) && !zipView.saved.startsWith('+') && /JSON/.test(jsonView.label);
+    pass('R8', '.lottie input is compared like for like (never zip vs plain JSON); JSON input shows the real file size', ok, { zipView, jsonView }); }
 
   window.REG = out;
   document.getElementById('msg').textContent = 'regressions done (' + APP_VERSION + ')';
