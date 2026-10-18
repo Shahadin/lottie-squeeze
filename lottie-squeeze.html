@@ -974,15 +974,32 @@ async function firstAnimationPath(zip) {
   if (!p) throw new UserError('This .lottie has no animation inside.');
   return p;
 }
+// Exact package path for an image reference: the asset's folder (u) joined with its file name (p), normalised.
+// Without a folder, the dotLottie conventions images/ (v1) and i/ (v2) are tried. Never matched by name alone,
+// so two images with the same name in different folders stay distinct.
+function resolveAssetEntry(zip, u, p) {
+  if (typeof p !== 'string' || !p || /^[a-z][a-z0-9+.-]*:/i.test(p)) return null;
+  const norm = s => {
+    const parts = [];
+    for (const seg of s.replace(/\\/g, '/').split('/')) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') { if (!parts.length) return null; parts.pop(); } else parts.push(seg);
+    }
+    return parts.join('/');
+  };
+  const dir = typeof u === 'string' && !/^[a-z][a-z0-9+.-]*:/i.test(u) ? u : '';
+  const candidates = dir.replace(/[\\/.]/g, '') ? [dir + '/' + p] : [p, 'images/' + p, 'i/' + p];
+  for (const c of candidates) { const path = norm(c); if (path && zip.file(path)) return path; }
+  return null;
+}
 // Put an animation's external images inline as data URIs, remembering where each came from
 async function inlineImages(anim, zip) {
   const origin = new Map();
   for (const asset of anim.assets || []) {
     if (typeof asset.p !== 'string' || asset.p.startsWith('data:') || asset.layers) continue;
-    const name = asset.p.split('/').pop();
-    const entry = Object.keys(zip.files).find(p => /^(i|images)\//.test(p) && p.endsWith('/' + name));
+    const entry = resolveAssetEntry(zip, asset.u, asset.p);
     if (!entry) continue;
-    const ext = name.split('.').pop().toLowerCase();
+    const ext = entry.split('.').pop().toLowerCase();
     const data = `data:${IMG_MIME[ext] || 'image/png'};base64,` + await zip.file(entry).async('base64');
     origin.set(asset.id, { entry, u: asset.u, p: asset.p, e: asset.e, data });
     asset.p = data; asset.u = ''; asset.e = 1;
@@ -1081,6 +1098,185 @@ async function repackDotLottie(input, o, optimize = optimizeLottie, onProgress) 
   return { blob: await out.generateAsync({ type: 'blob', mimeType: 'application/zip' }), results, animations: anims.length, extras: files.length - anims.length - images.length - 1 };
 }
 
+/* ---------- Strict Lossless ----------
+   A separate pipeline that never parses-and-rewrites the animation. Only two things are allowed:
+   1. JSON: remove whitespace outside strings. Every value token (numbers, strings, true/false/null) is copied
+      verbatim from the input text, so 9007199254740993, 1e+03, -0 and é stay exactly as written.
+   2. .lottie: repack the zip with stronger compression. Every entry keeps its exact uncompressed bytes.
+   Each output is checked by an independent verifier before it can be downloaded; if a check fails, or the
+   result is not smaller, the original is returned unchanged. */
+class StrictJsonError extends Error {}
+const JSON_NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+
+// Minifier: a full JSON grammar check that emits each token exactly as it appears in the input
+function minifyJsonStrict(text) {
+  const n = text.length, out = [];
+  let i = 0;
+  const fail = msg => { throw new StrictJsonError(`${msg} at character ${i}`); };
+  const ws = () => { while (i < n) { const c = text.charCodeAt(i); if (c === 32 || c === 9 || c === 10 || c === 13) i++; else break; } };
+  const string = () => {
+    const start = i++;
+    while (i < n) {
+      const c = text.charCodeAt(i);
+      if (c === 34) { i++; out.push(text.slice(start, i)); return; }
+      if (c === 92) {
+        const e = text[i + 1];
+        if (e === 'u') { if (!/^[0-9a-fA-F]{4}$/.test(text.substr(i + 2, 4))) fail('Invalid \\u escape'); i += 6; }
+        else if (e !== undefined && '"\\/bfnrt'.includes(e)) i += 2;
+        else fail('Invalid escape');
+        continue;
+      }
+      if (c < 32) fail('Unescaped control character in a string');
+      i++;
+    }
+    fail('Unterminated string');
+  };
+  const literal = word => { if (text.startsWith(word, i)) { out.push(word); i += word.length; } else fail('Unexpected token'); };
+  const value = depth => {
+    if (depth > 2000) fail('Nesting too deep');
+    ws();
+    if (i >= n) fail('Unexpected end of data');
+    const c = text[i];
+    if (c === '{') {
+      out.push('{'); i++; ws();
+      if (text[i] === '}') { out.push('}'); i++; return; }
+      for (;;) {
+        ws(); if (text[i] !== '"') fail('Expected a property name'); string();
+        ws(); if (text[i] !== ':') fail("Expected ':'"); out.push(':'); i++;
+        value(depth + 1); ws();
+        if (text[i] === ',') { out.push(','); i++; continue; }
+        if (text[i] === '}') { out.push('}'); i++; return; }
+        fail("Expected ',' or '}'");
+      }
+    }
+    if (c === '[') {
+      out.push('['); i++; ws();
+      if (text[i] === ']') { out.push(']'); i++; return; }
+      for (;;) {
+        value(depth + 1); ws();
+        if (text[i] === ',') { out.push(','); i++; continue; }
+        if (text[i] === ']') { out.push(']'); i++; return; }
+        fail("Expected ',' or ']'");
+      }
+    }
+    if (c === '"') return string();
+    if (c === 't') return literal('true');
+    if (c === 'f') return literal('false');
+    if (c === 'n') return literal('null');
+    JSON_NUMBER.lastIndex = i;
+    const m = JSON_NUMBER.exec(text);
+    if (!m || !m[0] || m[0] === '-') fail('Unexpected token');
+    out.push(m[0]); i += m[0].length;
+  };
+  value(0); ws();
+  if (i < n) fail('Unexpected data after the JSON value');
+  return out.join('');
+}
+
+// Verifier, written independently of the minifier: splits text into value tokens with a plain scanner
+// (no grammar), so a bug in one is unlikely to be repeated in the other.
+function jsonValueTokens(text) {
+  const tokens = [];
+  for (let i = 0; i < text.length;) {
+    const c = text[i];
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      tokens.push(text.slice(i, j + 1)); i = j + 1; continue;
+    }
+    if ('{}[]:,'.includes(c)) { tokens.push(c); i++; continue; }
+    let j = i;
+    while (j < text.length && !' \t\n\r{}[]:,"'.includes(text[j])) j++;
+    tokens.push(text.slice(i, j)); i = j;
+  }
+  return tokens;
+}
+function verifyStrictJson(input, output) {
+  try { JSON.parse(output); } catch (e) { return { ok: false, reason: 'the output is not valid JSON' }; }
+  const a = jsonValueTokens(input), b = jsonValueTokens(output);
+  if (a.length !== b.length) return { ok: false, reason: `the number of JSON tokens changed (${a.length} → ${b.length})` };
+  for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return { ok: false, reason: `JSON token ${k + 1} changed (${a[k].slice(0, 40)} → ${b[k].slice(0, 40)})` };
+  return { ok: true, tokens: a.length };
+}
+
+// Strict JSON: the minified text if it is verified and smaller, otherwise the original text
+function strictLosslessJson(text) {
+  let min;
+  try { min = minifyJsonStrict(text); }
+  catch (e) { return { ok: false, reason: e instanceof StrictJsonError ? 'the JSON is not valid: ' + e.message : 'the JSON could not be read: ' + e.message }; }
+  const check = verifyStrictJson(text, min);
+  if (!check.ok) { console.warn('[strict] JSON verification failed:', check.reason); return { ok: false, reason: 'verification failed: ' + check.reason }; }
+  if (byteLen(min) >= byteLen(text)) return { ok: true, text, unchanged: true, tokens: check.tokens };
+  return { ok: true, text: min, unchanged: false, tokens: check.tokens };
+}
+
+// A .lottie holding exactly this JSON text (images stay where they are in the JSON)
+async function strictPackJson(text, id = 'animation') {
+  const zip = new JSZip(), opts = { compression: 'DEFLATE', compressionOptions: { level: 9 }, createFolders: false };
+  const manifest = JSON.stringify({ version: '1', generator: 'Lottie Squeeze', author: '', revision: 1, animations: [{ id, speed: 1, loop: true, autoplay: true }] });
+  zip.file('manifest.json', manifest, opts);
+  zip.file('animations/' + id + '.json', text, opts);
+  const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/zip' });
+  const back = await JSZip.loadAsync(blob);
+  const entry = back.file('animations/' + id + '.json');
+  if (!entry || (await entry.async('string')) !== text) throw new Error('the packaged JSON did not read back identically');
+  return blob;
+}
+
+// Strict .lottie: same entries, same order, same bytes, same dates/comments; only the compression changes.
+// Formats that are already compressed are stored rather than deflated again.
+const STORED_EXT = /\.(png|jpe?g|webp|gif|mp3|ogg|m4a|aac|woff2?|zip|lottie)$/i;
+async function strictLosslessDotLottie(file) {
+  const src = await openZip(file), out = new JSZip();
+  for (const f of Object.values(src.files)) {
+    const meta = { date: f.date, comment: f.comment || undefined, unixPermissions: f.unixPermissions, dosPermissions: f.dosPermissions, createFolders: false };
+    if (f.dir) { out.file(f.name, null, { ...meta, dir: true }); continue; }
+    const compression = STORED_EXT.test(f.name) ? { compression: 'STORE' } : { compression: 'DEFLATE', compressionOptions: { level: 9 } };
+    out.file(f.name, await f.async('uint8array'), { ...meta, ...compression });
+  }
+  const blob = await out.generateAsync({ type: 'blob', mimeType: 'application/zip', comment: src.comment || undefined });
+  const check = await verifyStrictPackage(file, blob);
+  if (!check.ok) { console.warn('[strict] package verification failed:', check.reason); return { ok: false, reason: 'verification failed: ' + check.reason, check }; }
+  if (blob.size >= file.size) return { ok: true, blob: file, unchanged: true, check };
+  return { ok: true, blob, unchanged: false, check };
+}
+
+// Independent package check: fresh zip readers on both sides, nothing shared with the repacker
+async function verifyStrictPackage(original, candidate) {
+  let a, b;
+  try { a = await JSZip.loadAsync(original); } catch { return { ok: false, reason: 'the original package cannot be read' }; }
+  try { b = await JSZip.loadAsync(candidate); } catch { return { ok: false, reason: 'the new package cannot be read' }; }
+  const names = z => Object.keys(z.files).sort();
+  const na = names(a), nb = names(b);
+  const missing = na.filter(x => !b.files[x]), added = nb.filter(x => !a.files[x]);
+  if (missing.length) return { ok: false, reason: 'entries missing: ' + missing.slice(0, 5).join(', ') };
+  if (added.length) return { ok: false, reason: 'unexpected entries: ' + added.slice(0, 5).join(', ') };
+  for (const name of na) {
+    if (a.files[name].dir !== b.files[name].dir) return { ok: false, reason: name + ' changed between file and folder' };
+    if (a.files[name].dir) continue;
+    const x = await a.files[name].async('uint8array'), y = await b.files[name].async('uint8array');
+    if (x.length !== y.length) return { ok: false, reason: `${name} changed size (${x.length} → ${y.length} bytes)` };
+    for (let k = 0; k < x.length; k++) if (x[k] !== y[k]) return { ok: false, reason: `${name} differs at byte ${k}` };
+  }
+  // the package must still make sense: manifest animations exist, external image references resolve
+  const notes = [];
+  const manifestFile = b.file('manifest.json');
+  if (manifestFile) {
+    let m; try { m = JSON.parse(await manifestFile.async('string')); } catch { notes.push('manifest.json is not valid JSON (unchanged from the original)'); }
+    for (const anim of (m && m.animations) || []) if (!b.file('animations/' + anim.id + '.json') && !b.file('a/' + anim.id + '.json')) notes.push(`manifest lists animation "${anim.id}" but its file is missing (unchanged from the original)`);
+  }
+  for (const path of nb.filter(p => !b.files[p].dir && /^(a|animations)\/.+\.json$/.test(p))) {
+    let anim; try { anim = JSON.parse(await b.file(path).async('string')); } catch { notes.push(path + ' is not valid JSON (unchanged from the original)'); continue; }
+    for (const asset of anim.assets || []) {
+      if (asset.layers || typeof asset.p !== 'string' || asset.p.startsWith('data:') || asset.e === 1) continue;
+      if (!resolveAssetEntry(b, asset.u, asset.p)) notes.push(`${path}: image "${(asset.u || '') + asset.p}" not found in the package (unchanged from the original)`);
+    }
+  }
+  try { await readDotLottie(new File([candidate], 'check.lottie')); } catch (e) { notes.push('the package does not reopen: ' + (e.message || e)); }
+  return { ok: true, entries: na.filter(x => !a.files[x].dir).length, folders: na.filter(x => a.files[x].dir).length, notes };
+}
+
 /* ---------- example animation (for the first view) ---------- */
 function makeSample() {
   const W = 400, H = 400, OP = 90;
@@ -1130,8 +1326,9 @@ let optInput = null;   // { name, format: 'JSON' | 'dotLottie', bytes, text, fil
 /* Presets set every control at once. Each lists exactly what it does; changing any control afterwards
    switches to "Custom". minPsnr is the image quality floor (see processImage). */
 const PRESETS = {
-  lossless: { round: false, defaults: true, prec: 3, meta: false, names: false, hidden: true, hiddenShapes: false, unused: true, kf: true, dedupe: true, ifmt: 'keep', iq: 0.8, iscale: 1, reencode: false, minPsnr: 32,
-    hint: 'Changes nothing you can see. No rounding and no image re-encoding; names, metadata, timing and expressions kept. Removes whitespace, default values, unused and hidden data, keyframes that change nothing, and duplicate assets.' },
+  // Lossless runs its own strict pipeline (runStrict); these switches only show that nothing else is applied
+  lossless: { strict: true, round: false, defaults: false, prec: 3, meta: false, names: false, hidden: false, hiddenShapes: false, unused: false, kf: false, dedupe: false, ifmt: 'keep', iq: 0.8, iscale: 1, reencode: false, minPsnr: 32,
+    hint: 'Strict lossless. Only whitespace outside text values is removed, and .lottie files are repacked with stronger zip compression. Every number, name, asset and image byte stays exactly as it was, and the result is verified before download. If nothing can be saved, the original is returned.' },
   balanced: { round: true, defaults: true, prec: 3, meta: true, names: false, hidden: true, hiddenShapes: false, unused: true, kf: true, dedupe: true, ifmt: 'webp', iq: 0.8, iscale: 1, reencode: false, minPsnr: 32,
     hint: 'Recommended. Everything in Lossless, plus shapes rounded to 3 decimals (timing, colours and easing protected), After Effects metadata removed, and images turned into WebP where they stay above 32 dB quality (lossless WebP if not; JPEG/WebP only if 25% smaller). Names kept.' },
   maximum: { round: true, defaults: true, prec: 2, meta: true, names: true, hidden: true, hiddenShapes: true, unused: true, kf: true, dedupe: true, ifmt: 'webp', iq: 0.6, iscale: 1, reencode: true, minPsnr: 26,
@@ -1159,7 +1356,8 @@ function markCustom() { if (!applyingPreset && presetName !== 'custom') { preset
 const optOpts = () => ({
   round: $('#opt-round').checked, defaults: $('#opt-defaults').checked, prec: +$('#opt-prec').value, meta: $('#opt-meta').checked, names: $('#opt-names').checked, hidden: $('#opt-hidden').checked, hiddenShapes: $('#opt-hiddenShapes').checked, unused: $('#opt-unused').checked,
   ifmt: $('#opt-ifmt').value, iq: +$('#opt-iq').value / 100, iscale: +$('#opt-iscale').value, reencode: $('#opt-reencode').checked,
-  kf: $('#opt-kf').checked, dedupe: $('#opt-dedupe').checked, minPsnr: presetMinPsnr
+  kf: $('#opt-kf').checked, dedupe: $('#opt-dedupe').checked, minPsnr: presetMinPsnr,
+  strict: presetName === 'lossless'   // the processing mode always follows the preset the UI shows
 });
 const imageBytes = s => { let n = 0; const re = /"p":"(data:image[^"]*)"/g; let m; while ((m = re.exec(s))) n += m[1].length; return n; };
 
@@ -1195,6 +1393,11 @@ async function runOptimize() {
   if (workerReject) cancelWorker();   // an outdated job is still running: stop it
   setStatus($('#o-status'), 'Optimizing…');
   $('#o-dl').disabled = $('#o-dl-lottie').disabled = true;
+  if (o.strict) {
+    try { await runStrict(run, o, key); }
+    catch (e) { if (run === optRun) setStatus($('#o-status'), 'Could not process: ' + (e.message || e) + '. Nothing was changed.', 'warn'); }
+    return;
+  }
   try {
     let r;
     try { r = await optimizeAny(optSource, o, run, optInput.minified); }
@@ -1254,6 +1457,82 @@ async function runOptimize() {
     if (run === optRun) setStatus($('#o-status'), 'Could not optimize: ' + (e instanceof UserError ? e.message : e.message || e), 'warn');
   }
 }
+// Strict Lossless run: its own path, never the structural optimizer
+async function runStrict(run, o, key) {
+  const isZip = optInput.format === 'dotLottie';
+  const z = { isZip, strict: true };
+  let outText, pkg = null, json, note = '';
+  if (isZip) {
+    const res = await strictLosslessDotLottie(optInput.file).catch(e => ({ ok: false, reason: e.message || String(e) }));
+    if (run !== optRun) return;
+    z.check = res.check; z.pkgOk = res.ok; z.pkgUnchanged = !!res.unchanged; z.pkgReason = res.reason;
+    pkg = res.ok ? res.blob : optInput.file;   // never offer an unverified package: fall back to the original
+    // the .json download is the first animation, strictly minified
+    const zip = await openZip(optInput.file);
+    const first = await zip.file(await firstAnimationPath(zip)).async('string');
+    json = strictLosslessJson(first);
+    z.jsonBefore = byteLen(first); z.firstText = first;
+    if (run !== optRun) return;
+  } else {
+    json = strictLosslessJson(optInput.text);
+    z.jsonBefore = byteLen(optInput.text);
+  }
+  outText = json.ok ? json.text : (isZip ? null : optInput.text);
+  z.jsonOk = json.ok; z.jsonUnchanged = !!json.unchanged; z.jsonReason = json.reason; z.tokens = json.tokens;
+  z.jsonAfter = outText != null ? byteLen(outText) : null;
+
+  const r = { text: outText, stats: newStats(), hasExpr: false, strict: true, key, source: optSource };
+  r.anim = outText != null ? JSON.parse(outText) : optSource;   // parsed only to draw the preview
+  optResult = r;
+  if (!isZip && json.ok) {
+    try { pkg = await strictPackJson(outText); } catch (e) { pkg = null; z.packReason = e.message; }
+  }
+  if (run !== optRun) return;
+  r.dotLottie = pkg;
+  const [g0, g1] = await Promise.all([gzipSize(isZip ? z.firstText : optInput.text), outText != null ? gzipSize(outText) : null]);
+  if (run !== optRun) return;
+  Object.assign(z, { g0, g1, lottieAfter: pkg ? pkg.size : null });
+
+  $('#o-after-label').textContent = isZip ? 'Optimized · .lottie' : 'Optimized · JSON';
+  $('#o-saved-label').textContent = 'Saved';
+  if (isZip) showSaved(optInput.bytes, pkg.size); else showSaved(optInput.bytes, z.jsonAfter);
+  $('#o-gzip').textContent = g1 ? fmtBytes(g1) : 'n/a';
+  $('#o-gzip-label').textContent = (isZip ? 'Gzipped first animation' : 'Gzipped JSON') + (g0 ? ' · was ' + fmtBytes(g0) : '');
+  $('#o-meta2').textContent = metaText(r.anim);
+  play('o-play2', r.anim);
+  $('#o-dl').disabled = outText == null; $('#o-dl-size').textContent = outText != null ? fmtBytes(z.jsonAfter) : '';
+  $('#o-dl-lottie').disabled = !pkg; $('#o-dl-lottie-size').textContent = pkg ? fmtBytes(pkg.size) : '';
+  renderStrictLog(z);
+
+  if (isZip && !z.pkgOk) note = `Strict check failed (${z.pkgReason}), so the original .lottie is offered unchanged.`;
+  else if (!isZip && !z.jsonOk) note = `Strict lossless can't process this file: ${z.jsonReason}. The original is offered unchanged.`;
+  else if (isZip ? z.pkgUnchanged : z.jsonUnchanged) note = 'Already as small as strict lossless allows, so the original is returned unchanged.';
+  const warnNotes = isZip && z.check && z.check.notes && z.check.notes.length ? ' Note: ' + z.check.notes[0] + (z.check.notes.length > 1 ? ` (+${z.check.notes.length - 1} more)` : '') + '.' : '';
+  if (note) setStatus($('#o-status'), note + warnNotes, (isZip ? z.pkgOk : z.jsonOk) ? (warnNotes ? 'warn' : 'ok') : 'warn');
+  else setStatus($('#o-status'), (isZip ? 'Ready. Verified: every file in the package is byte-identical to the original.' : 'Ready. Verified: every value is identical to the original; only whitespace was removed.') + warnNotes, warnNotes ? 'warn' : 'ok');
+}
+
+function renderStrictLog(z) {
+  const items = [];
+  items.push(['Input', `${z.isZip ? '.lottie (zip)' : 'JSON'} · ${fmtBytes(optInput.bytes)}`]);
+  items.push(['Mode', 'Strict lossless: whitespace and zip compression only']);
+  if (z.isZip) {
+    items.push(['.lottie package', fmtBytes(optInput.bytes) + ' → ' + fmtBytes(z.lottieAfter) + (z.pkgUnchanged ? ' (original kept)' : '')]);
+    if (z.check && z.check.entries != null) items.push(['Package check', `${z.check.entries} files${z.check.folders ? ` and ${z.check.folders} folders` : ''}, all byte-identical`]);
+    else items.push(['Package check', 'failed: ' + z.pkgReason]);
+    if (z.check && z.check.notes) z.check.notes.forEach(n => items.push(['Package note', n]));
+  }
+  if (z.jsonAfter != null) items.push([z.isZip ? 'First animation as JSON' : 'JSON', fmtBytes(z.jsonBefore) + ' → ' + fmtBytes(z.jsonAfter) + (z.jsonUnchanged ? ' (original kept)' : '')]);
+  if (z.g0 && z.g1) items.push([z.isZip ? 'Gzipped first animation' : 'Gzipped JSON', fmtBytes(z.g0) + ' → ' + fmtBytes(z.g1)]);
+  items.push(['JSON check', z.jsonOk ? `${(z.tokens || 0).toLocaleString()} value tokens, all identical` : 'not passed: ' + z.jsonReason]);
+  if (!z.isZip && z.lottieAfter) items.push(['Same JSON packaged as .lottie (zip)', fmtBytes(z.lottieAfter)]);
+  $('#o-log').innerHTML = '';
+  for (const [k, v] of items) {
+    const li = document.createElement('li'); const a = document.createElement('span'); a.textContent = k;
+    const b = document.createElement('code'); b.textContent = v; li.append(a, b); $('#o-log').append(li);
+  }
+}
+
 function showSaved(before, after) {
   const pct = before ? (1 - after / before) * 100 : 0;
   $('#o-after').textContent = fmtBytes(after);
