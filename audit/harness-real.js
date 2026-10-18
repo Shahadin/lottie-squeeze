@@ -35,7 +35,8 @@ async function loadReal(name) {
   const W = app(); const res = await fetch('../tests/real/' + name);
   if (!res.ok) throw new Error('missing ' + name);
   const buf = await res.arrayBuffer();
-  if (name.endsWith('.lottie')) return { anim: await W.readDotLottie(new W.File([buf], name)), inBytes: buf.byteLength, format: 'lottie' };
+  const head = new Uint8Array(buf, 0, 2);   // like the app: a zip is a .lottie whatever its name, anything else is JSON
+  if (head[0] === 0x50 && head[1] === 0x4b) return { anim: await W.readDotLottie(new W.File([buf], name)), inBytes: buf.byteLength, format: 'lottie' };
   const text = new TextDecoder().decode(buf);
   return { anim: JSON.parse(text), inBytes: buf.byteLength, format: 'json', text };
 }

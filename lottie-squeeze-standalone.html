@@ -131,6 +131,8 @@ select { -webkit-appearance: none; appearance: none; padding-right: 30px; backgr
 .presets button:hover { color: var(--ink); }
 .presets button[aria-checked="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 0 0 1px var(--line); }
 input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
+.dl-size { font: 500 12px var(--mono); opacity: .75; }
+.dl-size:not(:empty)::before { content: "· "; }
 .toggle { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; cursor: pointer; }
 .toggle b { font-weight: 500; font-size: 13.5px; display: block; }
 .toggle small { color: var(--muted); font-size: 12.5px; line-height: 1.4; display: block; }
@@ -271,7 +273,8 @@ details.log[open] summary::after { content: "−"; }
             <input type="range" id="opt-prec" min="1" max="5" step="1" value="3">
             <p class="hint" id="opt-prec-hint">Applies to shapes and positions. Timing is never rounded; colours and easing keep at least 3 decimals.</p>
           </div>
-          <label class="toggle"><span><b>Remove editor metadata</b><small>After Effects match names and export info. Kept if the file uses expressions.</small></span><input type="checkbox" class="switch" id="opt-meta" checked></label>
+          <label class="toggle"><span><b>Remove default values</b><small>Flags that only say "off" (not hidden, not 3D, not auto-oriented). Players treat a missing flag the same way.</small></span><input type="checkbox" class="switch" id="opt-defaults" checked></label>
+          <label class="toggle"><span><b>Remove editor metadata</b><small>After Effects match names, property indexes and export info. Kept if the file uses expressions.</small></span><input type="checkbox" class="switch" id="opt-meta" checked></label>
           <label class="toggle"><span><b>Remove layer names</b><small class="warnline">Breaks keypaths, dynamic colours and code that finds layers by name.</small></span><input type="checkbox" class="switch" id="opt-names"></label>
           <label class="toggle"><span><b>Remove hidden layers</b><small>Kept when other layers or expressions could use them.</small></span><input type="checkbox" class="switch" id="opt-hidden" checked></label>
           <label class="toggle"><span><b>Remove hidden shapes</b><small>Switched-off strokes and fills inside layers. Slightly changes how lottie-web's SVG renderer draws edges.</small></span><input type="checkbox" class="switch" id="opt-hiddenShapes"></label>
@@ -324,8 +327,8 @@ details.log[open] summary::after { content: "−"; }
       <div class="foot">
         <span class="status" id="o-status">Working on the example…</span>
         <div class="actions">
-          <button class="btn ghost" id="o-dl" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>.json</button>
-          <button class="btn primary" id="o-dl-lottie" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>.lottie</button>
+          <button class="btn ghost" id="o-dl" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>.json<span class="dl-size" id="o-dl-size"></span></button>
+          <button class="btn primary" id="o-dl-lottie" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>.lottie<span class="dl-size" id="o-dl-lottie-size"></span></button>
         </div>
       </div>
       <details class="log"><summary>What changed</summary><ul id="o-log"><li>Nothing yet</li></ul></details>
@@ -716,7 +719,7 @@ function mergeDuplicateAssets(anim, stats, hasExpr) {
 // - a candidate is committed only if it is smaller, keeps the alpha channel exactly, and meets the quality floor
 //   (o.minPsnr). If the chosen quality misses the floor, higher qualities are tried; if none passes, the original stays.
 const IMG_DEFAULT_MIN_PSNR = 24;   // without a preset: only catches broken results
-const IMAGE_STAT_KEYS = ['images', 'imgBefore', 'imgAfter', 'imgSkipped', 'imgRejected', 'imgNotSmaller', 'imgFailed', 'alphaProtected', 'imgWorstColor', 'imgWorstPsnr'];
+const IMAGE_STAT_KEYS = ['images', 'imgBefore', 'imgAfter', 'imgSkipped', 'imgRejected', 'imgNotSmaller', 'imgFailed', 'alphaProtected', 'imgWorstColor', 'imgWorstPsnr', 'imgLossless'];
 const imageCache = new Map();   // image data -> (settings -> result): moving a slider doesn't re-encode unchanged images
 async function processImage(p, assetW, o) {
   const r = { p: null, counts: {} }, inc = k => { r.counts[k] = (r.counts[k] || 0) + 1; };
@@ -728,7 +731,12 @@ async function processImage(p, assetW, o) {
   const w = Math.max(1, Math.round(nw * k)), h = Math.max(1, Math.round(nh * k));
   const resize = w < nw;
   if (o.ifmt === 'keep' && !resize) return r;
-  if ((srcFmt === 'jpeg' || srcFmt === 'webp') && !resize && !o.reencode) { inc('imgSkipped'); return r; }
+  // An image that is already JPEG/WebP is only re-encoded when that is clearly worth it: at least 25% smaller
+  // and still above the quality floor measured against its current pixels. A second pass then finds nothing
+  // worth doing, so repeat passes don't keep lowering quality. (o.reencode lifts the 25% rule.)
+  const lossySrc = (srcFmt === 'jpeg' || srcFmt === 'webp') && !resize;
+  const minGain = lossySrc && !o.reencode ? 0.25 : 0;
+  const limit = p.length * (1 - minGain);
 
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0, w, h);
@@ -738,18 +746,27 @@ async function processImage(p, assetW, o) {
   if (fmt === 'jpeg' && alpha) { fmt = 'webp'; inc('alphaProtected'); }
   const minPsnr = o.minPsnr != null ? o.minPsnr : IMG_DEFAULT_MIN_PSNR;
   const qualities = fmt === 'png' ? [1] : [o.iq, ...[0.7, 0.8, 0.9, 0.95].filter(q => q > o.iq + 1e-9)];
+  const tryCandidate = async (out, floor) => {
+    let err;
+    try { err = await imageError(ctx, w, h, out); } catch { return false; }
+    if (err.alphaMax > 2 || err.psnr < floor) return false;
+    r.p = out; r.colorMean = err.colorMean; r.psnr = err.psnr; return true;
+  };
   let smaller = false;
   for (const q of qualities) {
     const out = encode(c, fmt, q, alpha);
     if (alpha && out.startsWith('data:image/jpeg')) break;   // this browser can't keep transparency in that format
-    if (out.length >= p.length) break;                        // higher qualities only get bigger
+    if (out.length >= limit) break;                           // higher qualities only get bigger
     smaller = true;
-    let err;
-    try { err = await imageError(ctx, w, h, out); } catch { break; }
-    if (err.alphaMax > 2) break;
-    if (err.psnr >= minPsnr) { r.p = out; r.colorMean = err.colorMean; r.psnr = err.psnr; return r; }
+    if (await tryCandidate(out, minPsnr)) return r;
   }
-  inc(smaller ? 'imgRejected' : 'imgNotSmaller');
+  // Last resort for PNG: lossless WebP keeps every pixel (only semi-transparent edges can shift by a
+  // rounding step) and is often much smaller than PNG.
+  if (fmt === 'webp' && srcFmt === 'png') {
+    const out = encode(c, 'webp', 1, alpha);
+    if (out.startsWith('data:image/webp') && out.length < p.length) { smaller = true; if (await tryCandidate(out, Math.max(minPsnr, 40))) { inc('imgLossless'); return r; } }
+  }
+  inc(lossySrc && minGain ? 'imgSkipped' : smaller ? 'imgRejected' : 'imgNotSmaller');
   return r;
 }
 async function recompressImages(anim, o, stats) {
@@ -778,7 +795,10 @@ async function recompressImages(anim, o, stats) {
    safe  – everything else (effects, unknown data): at least 3 decimals */
 const TIME_KEYS = new Set(['fr', 'ip', 'op', 'st', 'sr', 'tm', 'dr', 't']);
 const COLOR_TY = new Set(['fl', 'st', 'gf', 'gs']);
-const META_KEYS = new Set(['mn', 'cix']);   // lottie-web reads these only from expression code
+const META_KEYS = new Set(['mn', 'cix', 'ix', 'np']);   // lottie-web reads these only from expression code
+// Values players treat exactly like a missing key (checked in lottie-web: truthy tests, never === false).
+// bm:0 is NOT here: on canvas a missing blend mode keeps the previous layer's mode.
+const DEFAULT_VALUES = { hd: false, ddd: 0, ao: 0 };
 const NAME_KEYS = new Set(['nm', 'ln', 'cl']);   // keypaths, layer lookup, SVG id/class
 function childKind(key, val, parent, kind) {
   if (TIME_KEYS.has(key) && (typeof val === 'number' || key === 'tm')) return 'time';
@@ -793,7 +813,7 @@ function childKind(key, val, parent, kind) {
 }
 function cleanTree(node, o, hasExpr, stats) {
   const geomF = Math.pow(10, o.prec), safeF = Math.pow(10, Math.max(o.prec, 3));
-  const dropMeta = o.meta && !hasExpr, dropNames = o.names && !hasExpr, rounding = o.round !== false;
+  const dropMeta = o.meta && !hasExpr, dropNames = o.names && !hasExpr, rounding = o.round !== false, dropDefaults = !!o.defaults;
   const round = (v, kind) => {
     if (!rounding || kind === 'time' || Number.isInteger(v)) return v;
     const f = kind === 'geom' ? geomF : safeF;
@@ -810,6 +830,7 @@ function cleanTree(node, o, hasExpr, stats) {
         const val = v[k];
         if (typeof val !== 'object') {
           if (dropMeta && META_KEYS.has(k)) { stats.metaKeys++; continue; }
+          if (dropDefaults && k in DEFAULT_VALUES && val === DEFAULT_VALUES[k]) { stats.defaults++; continue; }
           if (dropNames && NAME_KEYS.has(k) && !(k === 'cl' && isMask)) { stats.nameKeys++; continue; }  // mask "cl" means closed, not a class
         }
         if (k === 'p' && typeof val === 'string') { out[k] = val; continue; }
@@ -824,7 +845,7 @@ function cleanTree(node, o, hasExpr, stats) {
 
 function newStats() {
   return { hidden: 0, hiddenShapes: 0, hiddenKept: 0, hiddenSkipped: '', assets: 0, images: 0, imgBefore: 0, imgAfter: 0,
-    imgSkipped: 0, imgRejected: 0, imgNotSmaller: 0, imgFailed: 0, alphaProtected: 0, imgWorstColor: 0, imgWorstPsnr: Infinity, rounded: 0, metaKeys: 0, nameKeys: 0, meta: false,
+    imgSkipped: 0, imgRejected: 0, imgNotSmaller: 0, imgFailed: 0, alphaProtected: 0, imgWorstColor: 0, imgWorstPsnr: Infinity, imgLossless: 0, rounded: 0, metaKeys: 0, nameKeys: 0, defaults: 0, meta: false,
     kfStatic: 0, kfRemoved: 0, kfTrimmed: 0, kfSkipped: '', dupAssets: 0 };
 }
 // Pure data steps. They also run inside the background worker, which is built from these same functions.
@@ -860,6 +881,7 @@ function workerSource() {
     mergeDuplicateAssets, childKind, cleanTree, newStats, optimizeStructure, optimizeFinish];
   const sets = { TIME_KEYS, COLOR_TY, META_KEYS, NAME_KEYS };
   return [
+    `const DEFAULT_VALUES = ${JSON.stringify(DEFAULT_VALUES)};`,
     ...Object.entries(arrows).map(([n, f]) => `const ${n} = ${f};`),
     ...Object.entries(sets).map(([n, v]) => `const ${n} = new Set(${JSON.stringify([...v])});`),
     ...fns.map(String),
@@ -1110,11 +1132,11 @@ let optInput = null;   // { name, format: 'JSON' | 'dotLottie', bytes, text, fil
 /* Presets set every control at once. Each lists exactly what it does; changing any control afterwards
    switches to "Custom". minPsnr is the image quality floor (see processImage). */
 const PRESETS = {
-  lossless: { round: false, prec: 3, meta: false, names: false, hidden: true, hiddenShapes: false, unused: true, kf: true, dedupe: true, ifmt: 'keep', iq: 0.8, iscale: 1, reencode: false, minPsnr: 32,
-    hint: 'Changes nothing you can see. No rounding and no image re-encoding; names, metadata, timing and expressions kept. Removes whitespace, unused and hidden data, keyframes that change nothing, and duplicate assets.' },
-  balanced: { round: true, prec: 3, meta: true, names: false, hidden: true, hiddenShapes: false, unused: true, kf: true, dedupe: true, ifmt: 'webp', iq: 0.8, iscale: 1, reencode: false, minPsnr: 32,
-    hint: 'Recommended. Everything in Lossless, plus shapes rounded to 3 decimals (timing, colours and easing protected), After Effects metadata removed, and PNG images turned into WebP only where they stay above 32 dB quality. Names kept.' },
-  maximum: { round: true, prec: 2, meta: true, names: true, hidden: true, hiddenShapes: true, unused: true, kf: true, dedupe: true, ifmt: 'webp', iq: 0.6, iscale: 1, reencode: true, minPsnr: 26,
+  lossless: { round: false, defaults: true, prec: 3, meta: false, names: false, hidden: true, hiddenShapes: false, unused: true, kf: true, dedupe: true, ifmt: 'keep', iq: 0.8, iscale: 1, reencode: false, minPsnr: 32,
+    hint: 'Changes nothing you can see. No rounding and no image re-encoding; names, metadata, timing and expressions kept. Removes whitespace, default values, unused and hidden data, keyframes that change nothing, and duplicate assets.' },
+  balanced: { round: true, defaults: true, prec: 3, meta: true, names: false, hidden: true, hiddenShapes: false, unused: true, kf: true, dedupe: true, ifmt: 'webp', iq: 0.8, iscale: 1, reencode: false, minPsnr: 32,
+    hint: 'Recommended. Everything in Lossless, plus shapes rounded to 3 decimals (timing, colours and easing protected), After Effects metadata removed, and images turned into WebP where they stay above 32 dB quality (lossless WebP if not; JPEG/WebP only if 25% smaller). Names kept.' },
+  maximum: { round: true, defaults: true, prec: 2, meta: true, names: true, hidden: true, hiddenShapes: true, unused: true, kf: true, dedupe: true, ifmt: 'webp', iq: 0.6, iscale: 1, reencode: true, minPsnr: 26,
     hint: 'Smallest files, visibly lossy. Shapes rounded to 2 decimals, layer names and hidden shapes removed (breaks keypaths and dynamic colours), every image re-encoded at lower quality down to 26 dB. Repeat passes keep lowering image quality.' }
 };
 let presetName = 'balanced', presetMinPsnr = PRESETS.balanced.minPsnr, applyingPreset = false;
@@ -1122,7 +1144,7 @@ function applyPreset(name) {
   const p = PRESETS[name];
   applyingPreset = true;
   $('#opt-round').checked = p.round; $('#opt-prec').value = p.prec; $('#opt-prec-out').textContent = p.prec;
-  ['meta', 'names', 'hidden', 'hiddenShapes', 'unused', 'kf', 'dedupe', 'reencode'].forEach(k => { $('#opt-' + k).checked = p[k]; });
+  ['defaults', 'meta', 'names', 'hidden', 'hiddenShapes', 'unused', 'kf', 'dedupe', 'reencode'].forEach(k => { $('#opt-' + k).checked = p[k]; });
   $('#opt-ifmt').value = p.ifmt; $('#opt-iq').value = Math.round(p.iq * 100); $('#opt-iq-out').textContent = Math.round(p.iq * 100); $('#opt-iscale').value = String(p.iscale);
   document.querySelectorAll('input[type="range"]').forEach(paintRange);
   presetName = name; presetMinPsnr = p.minPsnr; applyingPreset = false;
@@ -1137,7 +1159,7 @@ document.querySelectorAll('.presets button').forEach(b => b.addEventListener('cl
 function markCustom() { if (!applyingPreset && presetName !== 'custom') { presetName = 'custom'; showPreset(); } }
 
 const optOpts = () => ({
-  round: $('#opt-round').checked, prec: +$('#opt-prec').value, meta: $('#opt-meta').checked, names: $('#opt-names').checked, hidden: $('#opt-hidden').checked, hiddenShapes: $('#opt-hiddenShapes').checked, unused: $('#opt-unused').checked,
+  round: $('#opt-round').checked, defaults: $('#opt-defaults').checked, prec: +$('#opt-prec').value, meta: $('#opt-meta').checked, names: $('#opt-names').checked, hidden: $('#opt-hidden').checked, hiddenShapes: $('#opt-hiddenShapes').checked, unused: $('#opt-unused').checked,
   ifmt: $('#opt-ifmt').value, iq: +$('#opt-iq').value / 100, iscale: +$('#opt-iscale').value, reencode: $('#opt-reencode').checked,
   kf: $('#opt-kf').checked, dedupe: $('#opt-dedupe').checked, minPsnr: presetMinPsnr
 });
@@ -1193,7 +1215,7 @@ async function runOptimize() {
     $('#o-meta2').textContent = metaText(r.anim);
     play('o-play2', r.anim);
     renderLog(r, z);
-    $('#o-dl').disabled = false;
+    $('#o-dl').disabled = false; $('#o-dl-size').textContent = fmtBytes(z.jsonAfter); $('#o-dl-lottie-size').textContent = '';
     if (r.hasExpr && (o.meta || o.names || o.hidden || o.kf || o.dedupe)) setStatus($('#o-status'), 'This file uses expressions, so names, metadata, hidden layers, keyframes and duplicate assets were kept.', 'warn');
     else setStatus($('#o-status'), isZip ? 'Rebuilding the .lottie…' : 'Ready. Compare both previews before downloading.', isZip ? '' : 'ok');
 
@@ -1226,7 +1248,7 @@ async function runOptimize() {
       if (pkg) showSaved(optInput.bytes, pkg.size);
       else { $('#o-after-label').textContent = 'Optimized · JSON'; $('#o-saved-label').textContent = 'Saved vs its JSON'; showSaved(z.jsonBefore, z.jsonAfter); }
     }
-    $('#o-dl-lottie').disabled = !pkg;
+    $('#o-dl-lottie').disabled = !pkg; $('#o-dl-lottie-size').textContent = pkg ? fmtBytes(pkg.size) : '';
     renderLog(r, z);
     if (isZip && !pkg) setStatus($('#o-status'), `The .lottie couldn't be rebuilt (${z.repackFailed}), so its download is off. The .json download has the first animation.`, 'warn');
     else if (isZip && !(r.hasExpr && (o.meta || o.names || o.hidden || o.kf || o.dedupe))) setStatus($('#o-status'), z.animations > 1 ? `Ready. All ${z.animations} animations were optimized; the preview shows the first.` : 'Ready. Compare both previews before downloading.', 'ok');
@@ -1256,6 +1278,7 @@ function renderLog(r, z) {
   if (s.kfStatic || s.kfRemoved || s.kfTrimmed) items.push(['Keyframes removed / properties made static', s.kfRemoved + ' / ' + s.kfStatic]);
   if (s.kfSkipped) items.push(['Keyframes', 'kept: file uses expressions']);
   if (s.dupAssets) items.push(['Duplicate assets merged', s.dupAssets]);
+  if (s.defaults) items.push(['Default values removed', s.defaults.toLocaleString()]);
   if (s.metaKeys || s.meta) items.push(['Editor metadata removed', s.metaKeys.toLocaleString() + (s.meta ? ' + export info' : '')]);
   if (s.nameKeys) items.push(['Layer names removed', s.nameKeys.toLocaleString()]);
   if (s.hidden || s.hiddenShapes) items.push(['Hidden layers / shapes removed', s.hidden + ' / ' + s.hiddenShapes]);
@@ -1263,7 +1286,8 @@ function renderLog(r, z) {
   if (s.hiddenSkipped) items.push(['Hidden layers', 'kept: file uses expressions']);
   if (s.assets) items.push(['Unused assets removed', s.assets]);
   if (s.images) items.push([`Images re-encoded (${s.images}), lowest quality ${s.imgWorstPsnr === Infinity ? 'lossless' : s.imgWorstPsnr.toFixed(1) + ' dB'}`, fmtBytes(s.imgBefore) + ' → ' + fmtBytes(s.imgAfter)]);
-  if (s.imgSkipped) items.push(['Images already compressed, left as is', s.imgSkipped]);
+  if (s.imgLossless) items.push(['Images saved as lossless WebP (pixels unchanged)', s.imgLossless]);
+  if (s.imgSkipped) items.push(['Images already compressed, left as is (less than 25% to gain)', s.imgSkipped]);
   if (s.alphaProtected) items.push(['Transparent images kept out of JPEG', s.alphaProtected]);
   if (s.imgRejected) items.push(['Images kept original (would drop below the quality floor)', s.imgRejected]);
   $('#o-log').innerHTML = '';
@@ -1287,7 +1311,7 @@ function precHint() {
 }
 function scheduleOptimize() { clearTimeout(optTimer); optTimer = setTimeout(runOptimize, 250); }
 ['#opt-prec', '#opt-iq'].forEach(id => $(id).addEventListener('input', () => { $(id + '-out').textContent = $(id).value; if (id === '#opt-prec') precHint(); markCustom(); scheduleOptimize(); }));
-['#opt-round', '#opt-meta', '#opt-names', '#opt-hidden', '#opt-hiddenShapes', '#opt-unused', '#opt-kf', '#opt-dedupe', '#opt-ifmt', '#opt-iscale', '#opt-reencode'].forEach(id => $(id).addEventListener('change', () => { if (id === '#opt-round') precHint(); markCustom(); scheduleOptimize(); }));
+['#opt-round', '#opt-defaults', '#opt-meta', '#opt-names', '#opt-hidden', '#opt-hiddenShapes', '#opt-unused', '#opt-kf', '#opt-dedupe', '#opt-ifmt', '#opt-iscale', '#opt-reencode'].forEach(id => $(id).addEventListener('change', () => { if (id === '#opt-round') precHint(); markCustom(); scheduleOptimize(); }));
 applyPreset('balanced');
 
 async function handleLottieFile(file) {

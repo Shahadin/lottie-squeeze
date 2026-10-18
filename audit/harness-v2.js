@@ -59,6 +59,7 @@ function structCheck(orig, out, o) {
       for (const k of ['ip', 'op', 'st', 'sr', 'parent', 'tt', 'td', 'tp', 'ty', 'refId', 'hd']) if (sl[k] !== l[k]) {
         // a duplicate-asset merge repoints refId; that is fine when both assets had identical content
         if (k === 'refId' && sameAssetContent(orig, sl.refId, l.refId)) continue;
+        if (k === 'hd' && (sl.hd === true) === (l.hd === true)) continue;   // a missing hd means not hidden
         problems.push(`${c.id}/${l.ind}: ${k} ${sl[k]} → ${l[k]}`);
       }
       const A = collect(sl, true), B = collect(l, true);   // compare visible content on both sides
@@ -305,7 +306,7 @@ window.runRegressions = async function () {
     const s = structCheck(f, r.anim, D);
     const cardGroup = r.anim.layers.find(l => l.ind === 1).shapes[0];
     const expect = { parentKept: inds.includes(10), tpMatteKept: inds.includes(11), legacyMatteKept: inds.includes(12), guideRemoved: !inds.includes(16), layerControlTargetKept: lc && lc.layers.some(l => l.ind === 1),
-      hiddenStrokeRemoved: !cardGroup.it.some(x => x.hd), npMatchesItems: cardGroup.np === cardGroup.it.length };
+      hiddenStrokeRemoved: !cardGroup.it.some(x => x.hd), npMatchesItems: cardGroup.np == null || cardGroup.np === cardGroup.it.length };   // np may be removed as editor metadata
     pass('R2', 'Hidden layers needed by parents, mattes or layer controls are kept; unused guide removed; np stays correct',
       Object.values(expect).every(Boolean) && s.problems.length === 0 && v.worst.pctPx === 0 && v.alphaMax === 0,
       { ...expect, structuralProblems: s.problems, structuralWorstPctPx: v.worst.pctPx, structuralAlphaMax: v.alphaMax, vsOriginalIncludingRoundingPctPx: vsOriginal }); }
