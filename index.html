@@ -1,0 +1,1177 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0">
+<title>Lottie Squeeze</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: slim top bar + segmented tool switch; a quiet settings rail beside one large compare stage. */
+:root {
+  --bg: #f6f7f6;
+  --surface: #ffffff;
+  --sunk: #eef0ef;
+  --ink: #101413;
+  --muted: #69716f;
+  --faint: #9aa29f;
+  --line: #e4e7e5;
+  --accent: #0b8a76;
+  --accent-ink: #ffffff;
+  --accent-soft: #e0f3ef;
+  --good: #0b8a76;
+  --warn: #b25c00;
+  --warn-soft: #fbeedd;
+  --check-a: #f7f8f7;
+  --check-b: #eef0ef;
+  --glow: rgb(11 138 118 / .10);
+  --shadow: 0 1px 2px rgb(16 20 19 / .04), 0 8px 24px -12px rgb(16 20 19 / .10);
+  --sans: "Geist", "Segoe UI", system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, Consolas, monospace;
+  --r: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c0f0e; --surface: #141817; --sunk: #1b201f; --ink: #edf1ef; --muted: #96a09c; --faint: #67706d;
+    --line: #242a28; --accent: #3fd6bb; --accent-ink: #04211b; --accent-soft: #123129; --good: #3fd6bb;
+    --warn: #ffb35c; --warn-soft: #33240f; --check-a: #171c1b; --check-b: #1d2321; --glow: rgb(63 214 187 / .08);
+    --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 8px 24px -12px rgb(0 0 0 / .5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c0f0e; --surface: #141817; --sunk: #1b201f; --ink: #edf1ef; --muted: #96a09c; --faint: #67706d;
+  --line: #242a28; --accent: #3fd6bb; --accent-ink: #04211b; --accent-soft: #123129; --good: #3fd6bb;
+  --warn: #ffb35c; --warn-soft: #33240f; --check-a: #171c1b; --check-b: #1d2321; --glow: rgb(63 214 187 / .08);
+  --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 8px 24px -12px rgb(0 0 0 / .5);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+/* ad slots: placeholders until real ad code fills them */
+.ad { width: 100%; margin-inline: auto; display: grid; place-items: center; text-align: center; border: 1px dashed var(--line); border-radius: 12px; color: var(--faint); font: 500 11.5px var(--mono); letter-spacing: .04em;
+  background: repeating-linear-gradient(135deg, transparent 0 9px, var(--sunk) 9px 10px), var(--surface); overflow: hidden; }
+.ad.wide { max-width: 728px; min-height: 90px; }
+.ad.rect { max-width: 300px; min-height: 250px; }
+@media (max-width: 760px) { .ad.wide { max-width: 320px; min-height: 100px; } }
+.ad.live { border: 0; background: none; display: block; min-height: 0; }
+.foot-note { text-align: center; color: var(--faint); font-size: 12.5px; }
+body {
+  background: radial-gradient(900px 420px at 85% -10%, var(--glow), transparent 70%), var(--bg);
+  color: var(--ink); font-family: var(--sans); font-size: 14.5px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.app { max-width: 1200px; margin: 0 auto; padding-inline: 20px; padding-block: 18px 64px; display: grid; gap: 28px; }
+
+/* top bar */
+.bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
+/* logo: JSON braces pressing a dot into a tall oval, so the file gets squeezed */
+.mark { width: 32px; height: 32px; flex: none; display: block; }
+.mark .tile { fill: var(--ink); }
+.mark .brace { fill: none; stroke: var(--bg); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.mark .ball { fill: var(--accent); transform-box: fill-box; transform-origin: 50% 50%; }
+.logo:hover .mark .bl { animation: press-l .8s cubic-bezier(.3, 0, .3, 1) 1; }
+.logo:hover .mark .br { animation: press-r .8s cubic-bezier(.3, 0, .3, 1) 1; }
+.logo:hover .mark .ball { animation: squeeze .8s cubic-bezier(.3, 0, .3, 1) 1; }
+@keyframes press-l { 40% { transform: translateX(1.6px); } }
+@keyframes press-r { 40% { transform: translateX(-1.6px); } }
+@keyframes squeeze { 40% { transform: scale(.6, 1.18); } 70% { transform: scale(1.15, .94); } }
+.word b { font-weight: 600; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .logo:hover .mark * { animation: none !important; } }
+.tag { font-size: 12px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); padding: 2px 9px; border-radius: 999px; background: var(--surface); }
+.seg { display: inline-flex; background: var(--sunk); border: 1px solid var(--line); border-radius: 12px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; color: var(--muted); font: 500 13.5px var(--sans); padding: 7px 14px; border-radius: 9px; cursor: pointer; transition: color .15s, background .15s; }
+.seg button:hover { color: var(--ink); }
+.seg button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 0 0 1px var(--line); }
+
+.intro { display: grid; gap: 8px; }
+.intro h1 { margin: 0; font-size: clamp(28px, 4.4vw, 44px); font-weight: 600; letter-spacing: -0.035em; line-height: 1.05; text-wrap: balance; }
+.intro h1 span { color: var(--accent); }
+.intro p { margin: 0; color: var(--muted); font-size: 15.5px; max-width: 58ch; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* bench */
+.bench { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 880px) { .bench { grid-template-columns: minmax(0, 1fr); } }
+.rail { display: grid; gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+.group { padding: 16px; display: grid; gap: 14px; }
+.group + .group { border-top: 1px solid var(--line); }
+.group h2 { margin: 0; font-size: 12px; font-weight: 500; color: var(--faint); letter-spacing: .06em; text-transform: uppercase; }
+
+/* drop zone */
+.drop { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 12px; padding: 14px; border-radius: var(--r); border: 1px dashed var(--line); background: var(--surface); cursor: pointer; transition: border-color .15s, background .15s; }
+.drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop input { display: none; }
+.drop .ico { width: 40px; height: 40px; border-radius: 11px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.drop .ico svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.drop strong { display: block; font-weight: 600; font-size: 14px; }
+.drop small { color: var(--muted); font-size: 12.5px; }
+.file { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; padding-inline: 4px; }
+
+/* controls */
+.field { display: grid; gap: 8px; }
+.field .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.field label { font-size: 13.5px; font-weight: 500; }
+.field output { font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--sunk); padding: 1px 7px; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.hint { font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.45; }
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 18px; background: transparent; --p: 50%; cursor: pointer; }
+input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(var(--accent), var(--accent)) 0 / var(--p) 100% no-repeat, var(--sunk); }
+input[type="range"]::-moz-range-track { height: 4px; border-radius: 4px; background: var(--sunk); }
+input[type="range"]::-moz-range-progress { height: 4px; border-radius: 4px; background: var(--accent); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); box-shadow: 0 1px 3px rgb(0 0 0 / .2); }
+input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); }
+select, input[type="number"] { width: 100%; font: 13.5px var(--sans); padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); }
+select { -webkit-appearance: none; appearance: none; padding-right: 30px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px; background-repeat: no-repeat; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.toggle { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; cursor: pointer; }
+.toggle b { font-weight: 500; font-size: 13.5px; display: block; }
+.toggle small { color: var(--muted); font-size: 12.5px; line-height: 1.4; display: block; }
+.switch { -webkit-appearance: none; appearance: none; width: 34px; height: 20px; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; transition: background .18s; margin: 1px 0 0; flex: none; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .25); transition: transform .18s; }
+.switch:checked { background: var(--accent); }
+.switch:checked::after { transform: translateX(14px); }
+
+/* buttons */
+.btn { border: 0; border-radius: 10px; padding: 10px 16px; font: 600 13.5px var(--sans); cursor: pointer; background: var(--ink); color: var(--bg); display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: transform .1s, opacity .15s; }
+.btn:hover:not(:disabled) { opacity: .9; }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn:disabled { opacity: .35; cursor: not-allowed; }
+.btn.ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+.btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.btn.block { width: 100%; }
+
+/* stage */
+.stage { overflow: hidden; min-width: 0; }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+@media (max-width: 560px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .metric:nth-child(3) { border-left: 0; } .metric:nth-child(n+3) { border-top: 1px solid var(--line); } }
+.metric { padding: 16px 18px; display: grid; gap: 2px; min-width: 0; }
+.metric + .metric { border-left: 1px solid var(--line); }
+.metric span { font-size: 12.5px; color: var(--muted); }
+.metric b { font-family: var(--mono); font-weight: 500; font-size: 21px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.metric.win b { color: var(--good); }
+
+.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
+@media (max-width: 560px) { .compare { grid-template-columns: minmax(0, 1fr); } }
+.pane { min-width: 0; display: grid; gap: 8px; }
+.pane h3 { margin: 0; padding: 2px 4px; font: 500 13px var(--sans); display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pane h3 em { font-style: normal; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.pill { font: 600 11.5px var(--mono); padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.pill:empty { display: none; }
+.player { position: relative; aspect-ratio: 1 / 1; max-width: 100%; border-radius: 12px; overflow: hidden; border: 1px solid var(--line);
+  background-color: var(--check-a);
+  background-image: linear-gradient(45deg, var(--check-b) 25%, transparent 25%, transparent 75%, var(--check-b) 75%), linear-gradient(45deg, var(--check-b) 25%, transparent 25%, transparent 75%, var(--check-b) 75%);
+  background-size: 16px 16px; background-position: 0 0, 8px 8px; display: grid; place-items: center; }
+.player > div, .player video { width: 100%; height: 100%; }
+.player video { object-fit: contain; background: transparent; }
+.player > div { display: grid; place-items: center; }
+.player canvas.still { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+.note { padding: 14px; display: grid; gap: 10px; border-color: var(--warn); }
+.note p { margin: 0; font-size: 13px; }
+.cmd { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-top: 6px; }
+.cmd code { font-family: var(--mono); font-size: 11.5px; background: var(--sunk); border-radius: 8px; padding: 8px 10px; overflow-x: auto; white-space: nowrap; user-select: all; }
+.cmd .btn { padding: 7px 12px; }
+.alpha { margin: 0; font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: flex-start; }
+.alpha::before { content: ""; flex: none; width: 14px; height: 14px; margin-top: 2px; border-radius: 4px; border: 1px solid var(--line);
+  background-color: var(--check-a); background-image: linear-gradient(45deg, var(--check-b) 25%, transparent 25%, transparent 75%, var(--check-b) 75%), linear-gradient(45deg, var(--check-b) 25%, transparent 25%, transparent 75%, var(--check-b) 75%); background-size: 6px 6px; background-position: 0 0, 3px 3px; }
+.alpha.yes { color: var(--good); }
+.alpha.yes::before { border-color: var(--good); }
+#v-keybox { display: grid; gap: 14px; }
+#v-keybox[hidden] { display: none; }
+.keyrow { display: grid; grid-template-columns: 44px 1fr; gap: 8px; }
+input[type="color"] { width: 44px; height: 38px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; }
+.placeholder { color: var(--muted); font-size: 13px; padding: 24px; text-align: center; max-width: 32ch; margin: auto; }
+
+.foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--sunk); }
+.foot .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.status { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+.status.ok::before { background: var(--good); }
+.status.warn { color: var(--warn); }
+.status.warn::before { background: var(--warn); }
+.status:empty::before { display: none; }
+
+details.log { border-top: 1px solid var(--line); }
+details.log summary { list-style: none; cursor: pointer; padding: 12px 16px; font-size: 13px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; }
+details.log summary::-webkit-details-marker { display: none; }
+details.log summary::after { content: "+"; font-family: var(--mono); color: var(--muted); font-size: 16px; }
+details.log[open] summary::after { content: "−"; }
+.log ul { margin: 0; padding: 0 16px 14px; list-style: none; display: grid; gap: 2px; }
+.log li { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.log li:last-child { border-bottom: 0; }
+.log li code { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+.progress { height: 4px; background: var(--sunk); border-radius: 999px; overflow: hidden; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .1s linear; }
+.estimate { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { display: inline-block; font-size: 11.5px; font-weight: 500; padding: 2px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <header class="bar">
+    <div class="logo">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect class="tile" width="32" height="32" rx="9"/>
+        <path class="brace bl" d="M12.4 7.5 C 9.8 7.5, 10.2 10.8, 10.2 12.8 C 10.2 14.8, 9.4 16, 7.6 16 C 9.4 16, 10.2 17.2, 10.2 19.2 C 10.2 21.2, 9.8 24.5, 12.4 24.5"/>
+        <path class="brace br" d="M19.6 7.5 C 22.2 7.5, 21.8 10.8, 21.8 12.8 C 21.8 14.8, 22.6 16, 24.4 16 C 22.6 16, 21.8 17.2, 21.8 19.2 C 21.8 21.2, 22.2 24.5, 19.6 24.5"/>
+        <ellipse class="ball" cx="16" cy="16" rx="3" ry="5.6"/>
+      </svg>
+      <span class="word">Lottie <b>Squeeze</b></span>
+      <span class="tag">Runs in your browser</span>
+    </div>
+    <div class="seg" role="tablist" aria-label="Tool">
+      <button role="tab" id="tab-opt" aria-selected="true" aria-controls="panel-opt">Optimize Lottie</button>
+      <button role="tab" id="tab-vid" aria-selected="false" aria-controls="panel-vid">MP4 to Lottie</button>
+    </div>
+  </header>
+
+  <section class="intro">
+    <h1>Lighter Lottie files, <span>same motion.</span></h1>
+    <p>Compress Lottie JSON, or turn an MP4 into a Lottie animation. Your files never leave this device.</p>
+  </section>
+
+  <!-- AD SLOT: top banner (728×90 desktop, 320×100 mobile). Paste ad code inside, or set ADS in the script. -->
+  <div class="ad wide" data-slot="top"><span>Ad space · 728 × 90</span></div>
+
+  <!-- ============ OPTIMIZE ============ -->
+  <section id="panel-opt" role="tabpanel" aria-labelledby="tab-opt" class="bench">
+    <aside class="rail">
+      <label class="drop" id="opt-drop" tabindex="0">
+        <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span>
+        <span><strong>Upload a Lottie</strong><small>Drop .json or .lottie, or click</small></span>
+        <input type="file" id="opt-file" accept=".json,.lottie,application/json">
+      </label>
+      <div class="file" id="opt-name">Loaded: sample-bounce.json (example)</div>
+
+      <div class="card">
+        <div class="group">
+          <h2>Animation data</h2>
+          <div class="field">
+            <div class="top"><label for="opt-prec">Decimal precision</label><output id="opt-prec-out">3</output></div>
+            <input type="range" id="opt-prec" min="0" max="5" step="1" value="3">
+            <p class="hint">2–3 decimals look identical for most files.</p>
+          </div>
+          <label class="toggle"><span><b>Strip names &amp; metadata</b><small>Kept automatically if the file uses expressions.</small></span><input type="checkbox" class="switch" id="opt-names" checked></label>
+          <label class="toggle"><span><b>Remove hidden layers</b><small>Guides and anything switched off.</small></span><input type="checkbox" class="switch" id="opt-hidden" checked></label>
+          <label class="toggle"><span><b>Remove unused assets</b><small>Precomps and images nothing uses.</small></span><input type="checkbox" class="switch" id="opt-unused" checked></label>
+        </div>
+        <div class="group">
+          <h2>Embedded images</h2>
+          <div class="field">
+            <label for="opt-ifmt">Format</label>
+            <select id="opt-ifmt">
+              <option value="auto">Auto (JPEG if opaque, else WebP)</option>
+              <option value="webp" selected>WebP</option>
+              <option value="jpeg">JPEG (drops transparency)</option>
+              <option value="keep">Keep original</option>
+            </select>
+          </div>
+          <div class="field">
+            <div class="top"><label for="opt-iq">Quality</label><output id="opt-iq-out">75</output></div>
+            <input type="range" id="opt-iq" min="20" max="100" step="5" value="75">
+          </div>
+          <div class="field">
+            <label for="opt-iscale">Resolution</label>
+            <select id="opt-iscale">
+              <option value="1" selected>100% (original)</option>
+              <option value="0.75">75%</option>
+              <option value="0.5">50%</option>
+              <option value="0.35">35%</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <!-- AD SLOT: sidebar rectangle on the Optimize tab (300×250) -->
+      <div class="ad rect" data-slot="side-opt"><span>Ad space · 300 × 250</span></div>
+    </aside>
+
+    <div class="card stage">
+      <div class="metrics" aria-live="polite">
+        <div class="metric"><span>Original</span><b id="o-before">–</b></div>
+        <div class="metric"><span>Optimized</span><b id="o-after">–</b></div>
+        <div class="metric win"><span>Saved</span><b id="o-saved">–</b></div>
+        <div class="metric"><span>Gzipped</span><b id="o-gzip">–</b></div>
+      </div>
+      <div class="compare">
+        <div class="pane"><h3>Original <em id="o-meta1"></em></h3><div class="player"><div id="o-play1"></div></div></div>
+        <div class="pane"><h3><span>Optimized <span class="pill" id="o-pill"></span></span><em id="o-meta2"></em></h3><div class="player"><div id="o-play2"></div></div></div>
+      </div>
+      <div class="foot">
+        <span class="status" id="o-status">Working on the example…</span>
+        <div class="actions">
+          <button class="btn primary" id="o-dl" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>Download .json</button>
+        </div>
+      </div>
+      <details class="log"><summary>What changed</summary><ul id="o-log"><li>Nothing yet</li></ul></details>
+    </div>
+  </section>
+
+  <!-- ============ VIDEO ============ -->
+  <section id="panel-vid" role="tabpanel" aria-labelledby="tab-vid" class="bench" hidden>
+    <aside class="rail">
+      <label class="drop" id="v-drop" tabindex="0">
+        <span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg></span>
+        <span><strong>Upload a video</strong><small>.mp4, .webm or .mov · transparent videos supported</small></span>
+        <input type="file" id="v-file" accept="video/*,.mp4,.webm,.mov,.m4v">
+      </label>
+      <div class="file" id="v-name">No video loaded</div>
+
+      <div class="card note" id="v-fallback" hidden>
+        <p id="v-fallback-text"></p>
+        <button class="btn block" id="v-ff">Open with built-in converter</button>
+        <p class="hint">Downloads a video decoder once (about 25 MB). Runs on your device.</p>
+        <div id="v-cmdbox" hidden>
+          <p class="hint">Or convert it to a transparent WebM first, then upload that:</p>
+          <div class="cmd"><code id="v-cmd">ffmpeg -i input.mov -c:v libvpx-vp9 -pix_fmt yuva420p -crf 30 -b:v 0 output.webm</code><button class="btn ghost" id="v-copy">Copy</button></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="group">
+          <h2>Transparency</h2>
+          <p class="alpha" id="v-alpha">Load a video to check for transparency.</p>
+          <div class="field">
+            <label for="v-bg">Background</label>
+            <select id="v-bg">
+              <option value="keep" selected>Keep the video's own transparency</option>
+              <option value="key">Remove a solid background color</option>
+            </select>
+          </div>
+          <div id="v-keybox" hidden>
+            <div class="field">
+              <label for="v-key">Color to remove</label>
+              <div class="keyrow"><input type="color" id="v-key" value="#00ff00"><button class="btn ghost" id="v-key-auto" type="button">Pick from corners</button></div>
+              <p class="hint">Works for green screen, black or white backgrounds.</p>
+            </div>
+            <div class="field">
+              <div class="top"><label for="v-tol">Tolerance</label><output id="v-tol-out">18%</output></div>
+              <input type="range" id="v-tol" min="1" max="50" step="1" value="18">
+            </div>
+            <div class="field">
+              <div class="top"><label for="v-soft">Edge softness</label><output id="v-soft-out">8%</output></div>
+              <input type="range" id="v-soft" min="0" max="30" step="1" value="8">
+            </div>
+          </div>
+        </div>
+        <div class="group">
+          <h2>Frames</h2>
+          <div class="field">
+            <div class="top"><label for="v-fps">Frame rate</label><output id="v-fps-out">12 fps</output></div>
+            <input type="range" id="v-fps" min="5" max="30" step="1" value="12">
+            <p class="hint">Fewer frames is the biggest size win. 10–15 fps suits most loops.</p>
+          </div>
+          <div class="pair">
+            <div class="field"><label for="v-start">Start (s)</label><input type="number" id="v-start" min="0" step="0.1" value="0"></div>
+            <div class="field"><label for="v-end">End (s)</label><input type="number" id="v-end" min="0" step="0.1" value="0"></div>
+          </div>
+          <div class="field">
+            <div class="top"><label for="v-dedupe">Skip similar frames</label><output id="v-dedupe-out">0.5%</output></div>
+            <input type="range" id="v-dedupe" min="0" max="5" step="0.25" value="0.5">
+            <p class="hint">If less than this share of the picture changes, the last frame is held instead of storing a new one.</p>
+          </div>
+        </div>
+        <div class="group">
+          <h2>Image encoding</h2>
+          <div class="pair">
+            <div class="field">
+              <label for="v-width">Max width</label>
+              <select id="v-width">
+                <option value="240">240 px</option>
+                <option value="360">360 px</option>
+                <option value="480" selected>480 px</option>
+                <option value="720">720 px</option>
+                <option value="1080">1080 px</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="v-fmt">Format</label>
+              <select id="v-fmt">
+                <option value="webp" selected>WebP</option>
+                <option value="png">PNG (lossless)</option>
+                <option value="jpeg">JPEG (no alpha)</option>
+              </select>
+            </div>
+          </div>
+          <p class="hint">WebP and PNG keep transparency. WebP is far smaller.</p>
+          <div class="field">
+            <div class="top"><label for="v-q">Quality</label><output id="v-q-out">60</output></div>
+            <input type="range" id="v-q" min="20" max="95" step="5" value="60">
+          </div>
+        </div>
+        <div class="group">
+          <p class="hint estimate" id="v-estimate">Load a video to see the frame count.</p>
+          <div class="progress" aria-hidden="true"><i id="v-bar"></i></div>
+          <button class="btn block" id="v-go" disabled>Convert to Lottie</button>
+          <button class="btn ghost block" id="v-cancel" hidden>Cancel</button>
+        </div>
+      </div>
+      <!-- AD SLOT: sidebar rectangle on the MP4 tab (300×250) -->
+      <div class="ad rect" data-slot="side-vid"><span>Ad space · 300 × 250</span></div>
+    </aside>
+
+    <div class="card stage">
+      <div class="metrics" aria-live="polite">
+        <div class="metric"><span>Video</span><b id="v-before">–</b></div>
+        <div class="metric"><span>Lottie</span><b id="v-after">–</b></div>
+        <div class="metric"><span>Frames stored</span><b id="v-frames">–</b></div>
+        <div class="metric"><span>Gzipped</span><b id="v-gzip">–</b></div>
+      </div>
+      <div class="compare">
+        <div class="pane"><h3>Source video <em id="v-meta1"></em></h3><div class="player" id="v-vidbox"><p class="placeholder">Your video plays here once loaded.</p></div></div>
+        <div class="pane"><h3>Lottie result <em id="v-meta2"></em></h3><div class="player"><div id="v-play"><p class="placeholder">Each kept frame becomes a compressed image inside the Lottie JSON.</p></div></div></div>
+      </div>
+      <div class="foot">
+        <span class="status" id="v-status"></span>
+        <div class="actions">
+          <button class="btn ghost" id="v-send" disabled>Optimize further</button>
+          <button class="btn primary" id="v-dl" disabled><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>Download .json</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AD SLOT: bottom banner (728×90 desktop, 320×100 mobile) -->
+  <div class="ad wide" data-slot="bottom"><span>Ad space · 728 × 90</span></div>
+
+  <footer class="foot-note">Lottie Squeeze · Files are processed on your device and never uploaded.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const fmtBytes = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB';
+const byteLen = s => new Blob([s]).size;
+const clone = o => JSON.parse(JSON.stringify(o));
+
+async function gzipSize(str) {
+  try {
+    if (!window.CompressionStream) return null;
+    const buf = await new Response(new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+    return buf.byteLength;
+  } catch { return null; }
+}
+
+/* ---------- downloads (artifact capability, falls back to a normal link) ---------- */
+const downloadsP = (window.claude && typeof claude.use === 'function') ? claude.use('downloads').catch(() => null) : Promise.resolve(null);
+async function saveJSON(filename, text, statusEl) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const d = await downloadsP;
+  if (d) {
+    try { await d.save({ filename, data: blob }); setStatus(statusEl, 'Saved ' + filename, 'ok'); return; }
+    catch (e) {
+      if (e && e.code === 'declined') { setStatus(statusEl, 'Download cancelled.'); return; }
+      if (e && e.code === 'rate_limited') { setStatus(statusEl, 'A save prompt is already open.', 'warn'); return; }
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  setStatus(statusEl, 'Downloaded ' + filename, 'ok');
+}
+function setStatus(el, text, kind) { el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : ''); }
+
+/* ---------- lottie preview ---------- */
+const players = {};
+function play(id, data) {
+  if (players[id]) { players[id].destroy(); delete players[id]; }
+  const el = document.getElementById(id);
+  el.innerHTML = '';
+  if (!window.lottie) { el.innerHTML = '<p class="placeholder">Preview player failed to load.</p>'; return; }
+  try {
+    players[id] = lottie.loadAnimation({ container: el, renderer: 'svg', loop: true, autoplay: true, animationData: clone(data) });
+  } catch (e) { el.innerHTML = '<p class="placeholder">This file could not be previewed: ' + e.message + '</p>'; }
+}
+const metaText = a => `${a.w}×${a.h} · ${Math.round((a.op - a.ip) / a.fr * 10) / 10}s @ ${Math.round(a.fr)}fps`;
+
+/* ---------- image helpers ---------- */
+function loadImg(src) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('image decode failed')); i.src = src; });
+}
+function encode(canvas, fmt, q, keepAlpha) {
+  if (fmt === 'png') return canvas.toDataURL('image/png');
+  let url = canvas.toDataURL('image/' + fmt, q);
+  // Browsers without a WebP encoder (older Safari) return PNG; use JPEG unless transparency must survive
+  if (fmt === 'webp' && !url.startsWith('data:image/webp')) url = keepAlpha ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', q);
+  return url;
+}
+function hasAlpha(ctx, w, h) {
+  const d = ctx.getImageData(0, 0, w, h).data;
+  for (let i = 3; i < d.length; i += 16) if (d[i] < 255) return true;
+  return false;
+}
+
+/* ---------- optimizer ---------- */
+function detectExpressions(node) {
+  let found = false;
+  (function walk(n) {
+    if (found || !n || typeof n !== 'object') return;
+    if (!Array.isArray(n) && typeof n.x === 'string' && n.x.length > 0 && ('k' in n || 'a' in n)) { found = true; return; }
+    for (const k in n) walk(n[k]);
+  })(node);
+  return found;
+}
+
+function removeHidden(anim, stats) {
+  const filterShapes = arr => arr.filter(s => {
+    if (s && s.hd === true) { stats.hidden++; return false; }
+    if (s && Array.isArray(s.it)) s.it = filterShapes(s.it);
+    return true;
+  });
+  const filterLayers = layers => {
+    const parents = new Set(layers.map(l => l.parent).filter(p => p != null));
+    return layers.filter((l, i) => {
+      const nextUsesMatte = layers[i + 1] && layers[i + 1].tt;
+      if (l.hd === true && !l.td && !nextUsesMatte && !parents.has(l.ind)) { stats.hidden++; return false; }
+      if (Array.isArray(l.shapes)) l.shapes = filterShapes(l.shapes);
+      return true;
+    });
+  };
+  if (Array.isArray(anim.layers)) anim.layers = filterLayers(anim.layers);
+  (anim.assets || []).forEach(a => { if (Array.isArray(a.layers)) a.layers = filterLayers(a.layers); });
+}
+
+function removeUnusedAssets(anim, stats) {
+  if (!Array.isArray(anim.assets) || !anim.assets.length) return;
+  const byId = new Map(anim.assets.map(a => [a.id, a]));
+  const used = new Set();
+  const visit = layers => (layers || []).forEach(l => {
+    if (l.refId != null && !used.has(l.refId)) { used.add(l.refId); const a = byId.get(l.refId); if (a && a.layers) visit(a.layers); }
+  });
+  visit(anim.layers);
+  const before = anim.assets.length;
+  anim.assets = anim.assets.filter(a => used.has(a.id));
+  stats.assets += before - anim.assets.length;
+}
+
+async function recompressImages(anim, o, stats) {
+  if (o.ifmt === 'keep' && o.iscale === 1) return;
+  for (const a of anim.assets || []) {
+    if (typeof a.p !== 'string' || !a.p.startsWith('data:image') || a.p.startsWith('data:image/svg')) continue;
+    try {
+      const img = await loadImg(a.p);
+      const w = Math.max(1, Math.round(img.naturalWidth * o.iscale)), h = Math.max(1, Math.round(img.naturalHeight * o.iscale));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0, w, h);
+      let fmt = o.ifmt;
+      if (fmt === 'keep') fmt = a.p.startsWith('data:image/jpeg') ? 'jpeg' : a.p.startsWith('data:image/webp') ? 'webp' : 'png';
+      if (fmt === 'auto') fmt = hasAlpha(ctx, w, h) ? 'webp' : 'jpeg';
+      if (fmt === 'jpeg' && hasAlpha(ctx, w, h)) { // flatten onto white so transparent pixels don't turn black
+        const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
+        const x2 = c2.getContext('2d'); x2.fillStyle = '#fff'; x2.fillRect(0, 0, w, h); x2.drawImage(c, 0, 0);
+        c.getContext('2d').drawImage(c2, 0, 0);
+      }
+      const out = encode(c, fmt, o.iq, fmt !== 'jpeg' && hasAlpha(c.getContext('2d'), w, h));
+      if (out.length < a.p.length) {
+        stats.imgBefore += a.p.length; stats.imgAfter += out.length; stats.images++;
+        a.p = out; a.e = 1; if (a.u == null) a.u = '';
+      }
+    } catch { /* leave image as is */ }
+  }
+}
+
+function cleanTree(node, o, hasExpr, stats) {
+  const f = Math.pow(10, o.prec);
+  const strip = o.names && !hasExpr;
+  const dropKeys = strip ? new Set(['nm', 'mn', 'ix', 'cix', 'cl', 'ln']) : new Set();
+  const rec = v => {
+    if (typeof v === 'number') { const r = Math.round(v * f) / f; if (r !== v) stats.rounded++; return Object.is(r, -0) ? 0 : r; }
+    if (Array.isArray(v)) return v.map(rec);
+    if (v && typeof v === 'object') {
+      const out = {};
+      for (const k in v) {
+        if (dropKeys.has(k) && typeof v[k] !== 'object') { stats.keys++; continue; }
+        if (k === 'p' && typeof v[k] === 'string') { out[k] = v[k]; continue; }
+        out[k] = rec(v[k]);
+      }
+      return out;
+    }
+    return v;
+  };
+  return rec(node);
+}
+
+async function optimizeLottie(src, o) {
+  const stats = { hidden: 0, assets: 0, images: 0, imgBefore: 0, imgAfter: 0, rounded: 0, keys: 0, meta: false };
+  let a = clone(src);
+  const hasExpr = detectExpressions(a);
+  if (o.names && !hasExpr && a.meta) { delete a.meta; stats.meta = true; }
+  if (o.hidden) removeHidden(a, stats);
+  if (o.unused) removeUnusedAssets(a, stats);
+  await recompressImages(a, o, stats);
+  a = cleanTree(a, o, hasExpr, stats);
+  return { anim: a, text: JSON.stringify(a), stats, hasExpr };
+}
+
+/* ---------- .lottie (dotLottie zip) reader ---------- */
+async function readDotLottie(file) {
+  if (!window.JSZip) throw new Error('zip support failed to load');
+  const zip = await JSZip.loadAsync(file);
+  let animPath = null;
+  const manifest = zip.file('manifest.json');
+  if (manifest) {
+    const m = JSON.parse(await manifest.async('string'));
+    const first = m.animations && m.animations[0];
+    if (first) animPath = Object.keys(zip.files).find(p => p.match(new RegExp('^(a|animations)/' + first.id + '\\.json$')));
+  }
+  if (!animPath) animPath = Object.keys(zip.files).find(p => /^(a|animations)\/.+\.json$/.test(p));
+  if (!animPath) throw new Error('no animation found inside the .lottie file');
+  const anim = JSON.parse(await zip.file(animPath).async('string'));
+  for (const asset of anim.assets || []) {
+    if (typeof asset.p !== 'string' || asset.p.startsWith('data:') || asset.layers) continue;
+    const name = asset.p.split('/').pop();
+    const entry = Object.keys(zip.files).find(p => /^(i|images)\//.test(p) && p.endsWith('/' + name));
+    if (!entry) continue;
+    const ext = name.split('.').pop().toLowerCase();
+    const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : ext === 'svg' ? 'image/svg+xml' : 'image/png';
+    asset.p = `data:${mime};base64,` + await zip.file(entry).async('base64');
+    asset.u = ''; asset.e = 1;
+  }
+  return anim;
+}
+
+/* ---------- example animation (for the first view) ---------- */
+function makeSample() {
+  const W = 400, H = 400, OP = 90;
+  const c = document.createElement('canvas'); c.width = c.height = 400;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(140, 120, 20, 200, 200, 300);
+  g.addColorStop(0, '#dfe7ff'); g.addColorStop(.55, '#9fb3ff'); g.addColorStop(1, '#3c4fb8');
+  x.fillStyle = g; x.fillRect(0, 0, 400, 400);
+  for (let i = 0; i < 2600; i++) { x.fillStyle = `rgba(255,255,255,${Math.random() * .12})`; x.fillRect(Math.random() * 400, Math.random() * 400, 2, 2); }
+  const bgPng = c.toDataURL('image/png');
+  const ease = { i: { x: [0.666666666667], y: [1] }, o: { x: [0.333333333333], y: [0] } };
+  const colors = [[0.996078431373, 0.784313725490, 0.278431372549, 1], [1, 0.443137254902, 0.384313725490, 1], [0.250980392157, 0.858823529412, 0.666666666667, 1], [1, 1, 1, 1]];
+  const balls = colors.map((col, n) => {
+    const x0 = 80 + n * 80.0000001, lo = 300.123456789, hi = 120.987654321 + n * 15.333333;
+    const kf = [0, 22.5, 45, 67.5].map((t, j) => ({ ...clone(ease), t: t + n * 3.333333333, s: [x0, j % 2 ? lo : hi, 0], to: [0, 0, 0], ti: [0, 0, 0] }));
+    kf.push({ t: OP, s: [x0, hi, 0] });
+    return {
+      ddd: 0, ind: n + 2, ty: 4, nm: `Ball ${n + 1} — bounce rig (do not rename)`, sr: 1,
+      ks: { o: { a: 0, k: 100, ix: 11 }, r: { a: 0, k: 0, ix: 10 }, p: { a: 1, k: kf, ix: 2 }, a: { a: 0, k: [0, 0, 0], ix: 1 }, s: { a: 0, k: [100, 100, 100], ix: 6 } },
+      ao: 0,
+      shapes: [{ ty: 'gr', it: [
+        { d: 1, ty: 'el', s: { a: 0, k: [46.6666666667, 46.6666666667], ix: 2 }, p: { a: 0, k: [0, 0], ix: 3 }, nm: 'Ellipse Path 1', mn: 'ADBE Vector Shape - Ellipse', hd: false },
+        { ty: 'fl', c: { a: 0, k: col, ix: 4 }, o: { a: 0, k: 100, ix: 5 }, r: 1, bm: 0, nm: 'Fill 1', mn: 'ADBE Vector Graphic - Fill', hd: false },
+        { ty: 'st', c: { a: 0, k: [0, 0, 0, 1], ix: 3 }, o: { a: 0, k: 100, ix: 4 }, w: { a: 0, k: 2, ix: 5 }, lc: 1, lj: 1, ml: 4, bm: 0, nm: 'Stroke (unused)', mn: 'ADBE Vector Graphic - Stroke', hd: true },
+        { ty: 'tr', p: { a: 0, k: [0, 0], ix: 2 }, a: { a: 0, k: [0, 0], ix: 1 }, s: { a: 0, k: [100, 100], ix: 3 }, r: { a: 0, k: 0, ix: 6 }, o: { a: 0, k: 100, ix: 7 }, sk: { a: 0, k: 0, ix: 4 }, sa: { a: 0, k: 0, ix: 5 }, nm: 'Transform' }
+      ], nm: 'Ellipse 1', np: 3, cix: 2, bm: 0, ix: 1, mn: 'ADBE Vector Group', hd: false }],
+      ip: 0, op: OP, st: 0, bm: 0
+    };
+  });
+  const guide = { ddd: 0, ind: 1, ty: 3, nm: 'GUIDE — safe area', hd: true, sr: 1, ks: { o: { a: 0, k: 0 }, r: { a: 0, k: 0 }, p: { a: 0, k: [200, 200, 0] }, a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] } }, ao: 0, ip: 0, op: OP, st: 0, bm: 0 };
+  const bg = { ddd: 0, ind: 9, ty: 2, nm: 'background.png', cl: 'png', refId: 'image_0', sr: 1, ks: { o: { a: 0, k: 100, ix: 11 }, r: { a: 0, k: 0, ix: 10 }, p: { a: 0, k: [200, 200, 0], ix: 2 }, a: { a: 0, k: [200, 200, 0], ix: 1 }, s: { a: 0, k: [100, 100, 100], ix: 6 } }, ao: 0, ip: 0, op: OP, st: 0, bm: 0 };
+  return {
+    v: '5.7.4', fr: 30, ip: 0, op: OP, w: W, h: H, nm: 'sample-bounce', ddd: 0,
+    meta: { g: 'LottieFiles AE 3.1.1', a: 'Example', k: 'bounce, loader', d: 'Example animation bundled with Lottie Squeeze', tc: '' },
+    assets: [
+      { id: 'image_0', w: 400, h: 400, u: '', p: bgPng, e: 1 },
+      { id: 'comp_unused', nm: 'Old intro (unused)', layers: [clone(guide)] }
+    ],
+    layers: [guide, ...balls, bg], markers: []
+  };
+}
+
+/* ================= OPTIMIZE TAB ================= */
+let optSource = null, optName = 'sample-bounce.json', optResult = null, optRun = 0, optTimer = null;
+const optOpts = () => ({
+  prec: +$('#opt-prec').value, names: $('#opt-names').checked, hidden: $('#opt-hidden').checked, unused: $('#opt-unused').checked,
+  ifmt: $('#opt-ifmt').value, iq: +$('#opt-iq').value / 100, iscale: +$('#opt-iscale').value
+});
+
+function loadOptSource(anim, name, srcText) {
+  if (!anim || typeof anim !== 'object' || !Array.isArray(anim.layers)) throw new Error('This file does not look like a Lottie animation (no "layers" found).');
+  optSource = anim; optName = name;
+  optSource.__size = srcText != null ? byteLen(srcText) : byteLen(JSON.stringify(anim, null, 2));
+  $('#o-before').textContent = fmtBytes(optSource.__size);
+  $('#o-meta1').textContent = metaText(anim);
+  play('o-play1', anim);
+  runOptimize();
+}
+
+async function runOptimize() {
+  if (!optSource) return;
+  const run = ++optRun;
+  setStatus($('#o-status'), 'Optimizing…');
+  $('#o-dl').disabled = true;
+  const src = { ...optSource }; delete src.__size;
+  try {
+    const r = await optimizeLottie(src, optOpts());
+    if (run !== optRun) return;
+    optResult = r;
+    const after = byteLen(r.text), before = optSource.__size;
+    $('#o-after').textContent = fmtBytes(after);
+    const pct = before ? (1 - after / before) * 100 : 0;
+    $('#o-saved').textContent = (pct >= 0 ? '' : '+') + Math.abs(pct).toFixed(1) + '%';
+    $('#o-pill').textContent = pct > 0 ? '−' + Math.round(pct) + '%' : '';
+    $('#o-gzip').textContent = '…';
+    gzipSize(r.text).then(g => { if (run === optRun) $('#o-gzip').textContent = g ? fmtBytes(g) : 'n/a'; });
+    $('#o-meta2').textContent = metaText(r.anim);
+    play('o-play2', r.anim);
+    renderLog(r);
+    $('#o-dl').disabled = false;
+    setStatus($('#o-status'), r.hasExpr && optOpts().names ? 'Names kept: this file uses expressions.' : 'Ready. Compare both previews before downloading.', r.hasExpr && optOpts().names ? 'warn' : 'ok');
+  } catch (e) {
+    if (run === optRun) setStatus($('#o-status'), 'Could not optimize: ' + e.message, 'warn');
+  }
+}
+
+function renderLog(r) {
+  const s = r.stats, items = [];
+  items.push(['Numbers rounded', s.rounded.toLocaleString()]);
+  if (s.keys) items.push(['Names / metadata keys removed', s.keys.toLocaleString()]);
+  if (s.meta) items.push(['Export info block removed', 'meta']);
+  if (s.hidden) items.push(['Hidden layers & shapes removed', s.hidden]);
+  if (s.assets) items.push(['Unused assets removed', s.assets]);
+  if (s.images) items.push([`Images recompressed (${s.images})`, fmtBytes(s.imgBefore) + ' → ' + fmtBytes(s.imgAfter)]);
+  items.push(['Whitespace', 'minified']);
+  $('#o-log').innerHTML = '';
+  for (const [k, v] of items) {
+    const li = document.createElement('li'); const a = document.createElement('span'); a.textContent = k;
+    const b = document.createElement('code'); b.textContent = v; li.append(a, b); $('#o-log').append(li);
+  }
+}
+
+/* filled slider tracks (WebKit) */
+function paintRange(el) { el.style.setProperty('--p', ((el.value - el.min) / (el.max - el.min) * 100) + '%'); }
+document.querySelectorAll('input[type="range"]').forEach(el => { paintRange(el); el.addEventListener('input', () => paintRange(el)); });
+
+function scheduleOptimize() { clearTimeout(optTimer); optTimer = setTimeout(runOptimize, 250); }
+['#opt-prec', '#opt-iq'].forEach(id => $(id).addEventListener('input', () => { $(id + '-out').textContent = $(id).value; scheduleOptimize(); }));
+['#opt-names', '#opt-hidden', '#opt-unused', '#opt-ifmt', '#opt-iscale'].forEach(id => $(id).addEventListener('change', scheduleOptimize));
+
+async function handleLottieFile(file) {
+  if (!file) return;
+  $('#opt-name').textContent = 'Reading ' + file.name + '…';
+  try {
+    if (/\.lottie$/i.test(file.name)) {
+      const anim = await readDotLottie(file);
+      loadOptSource(anim, file.name.replace(/\.lottie$/i, '.json'), null);
+      optSource.__size = file.size; $('#o-before').textContent = fmtBytes(file.size);
+    } else {
+      const text = await file.text();
+      loadOptSource(JSON.parse(text), file.name, text);
+    }
+    $('#opt-name').textContent = 'Loaded: ' + file.name;
+  } catch (e) {
+    $('#opt-name').textContent = 'Could not read ' + file.name;
+    setStatus($('#o-status'), (e instanceof SyntaxError ? 'The file is not valid JSON.' : e.message), 'warn');
+  }
+}
+wireDrop('#opt-drop', '#opt-file', handleLottieFile);
+$('#o-dl').addEventListener('click', () => {
+  if (!optResult) return;
+  const base = optName.replace(/\.json$/i, '');
+  saveJSON(base + '.min.json', optResult.text, $('#o-status'));
+});
+
+/* ================= VIDEO TAB ================= */
+const vid = document.createElement('video');
+vid.muted = true; vid.playsInline = true; vid.preload = 'auto'; vid.loop = true; vid.controls = true;
+let vidFile = null, vidResult = null, cancelFlag = false;
+let src = null;   // { kind: 'video' | 'ffmpeg', w, h, duration, alpha, name?, bytes?, first? }
+let ff = null;    // ffmpeg.wasm instance, loaded only when the browser can't decode a file itself
+const FF_JS = 'https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js';
+const FF_CORE = 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js';
+
+const keyOn = () => $('#v-bg').value === 'key';
+const needAlpha = () => !!(src && src.alpha) || keyOn();
+
+function updateEstimate() {
+  if (!src) return;
+  const fps = +$('#v-fps').value;
+  const w = Math.min(+$('#v-width').value, src.w), h = Math.round(src.h * w / src.w);
+  $('#v-estimate').innerHTML = '';
+  const t = document.createElement('span');
+  if (src.duration) {
+    const s = +$('#v-start').value || 0, e = +$('#v-end').value || src.duration;
+    const n = Math.max(0, Math.floor((Math.min(e, src.duration) - s) * fps));
+    t.textContent = `Up to ${n} frames at ${w}×${h} px. `;
+    $('#v-estimate').append(t);
+    if (n > 300) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = 'Large: trim or lower the frame rate'; $('#v-estimate').append(c); }
+    $('#v-go').disabled = n < 1;
+  } else {
+    t.textContent = `${w}×${h} px at ${fps} fps. Frame count appears after converting.`;
+    $('#v-estimate').append(t);
+    $('#v-go').disabled = false;
+  }
+  if ($('#v-fmt').value === 'jpeg' && needAlpha()) {
+    const c = document.createElement('span'); c.className = 'chip'; c.textContent = 'JPEG has no transparency: WebP will be used';
+    $('#v-estimate').append(c);
+  }
+}
+[['#v-fps', v => v + ' fps'], ['#v-q', v => v], ['#v-dedupe', v => v + '%'], ['#v-tol', v => v + '%'], ['#v-soft', v => v + '%']].forEach(([id, f]) =>
+  $(id).addEventListener('input', () => { $(id + '-out').textContent = f($(id).value); updateEstimate(); }));
+['#v-start', '#v-end', '#v-width', '#v-fmt'].forEach(id => $(id).addEventListener('input', updateEstimate));
+
+/* ---------- transparency: alpha badge + background removal ---------- */
+function setAlphaBadge() {
+  const b = $('#v-alpha');
+  if (!src) { b.textContent = 'Load a video to check for transparency.'; b.className = 'alpha'; return; }
+  if (src.alpha) { b.textContent = 'Transparent video detected. The Lottie keeps the transparency.'; b.className = 'alpha yes'; }
+  else if (keyOn()) { b.textContent = 'Background removal is on. The Lottie will be transparent.'; b.className = 'alpha yes'; }
+  else { b.textContent = 'No transparency in this video. Turn on background removal to cut out a solid color.'; b.className = 'alpha'; }
+}
+$('#v-bg').addEventListener('change', () => { $('#v-keybox').hidden = !keyOn(); setAlphaBadge(); updateEstimate(); previewStill(); });
+['#v-key', '#v-tol', '#v-soft'].forEach(id => $(id).addEventListener('input', previewStill));
+
+function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function rgbToHex(r, g, b) { return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join(''); }
+
+function applyKey(ctx, W, H) {
+  const img = ctx.getImageData(0, 0, W, H), d = img.data;
+  const key = hexToRgb($('#v-key').value);
+  const tol = +$('#v-tol').value / 100, soft = Math.max(0.001, +$('#v-soft').value / 100);
+  // despill only for strongly tinted keys (green / blue screens), not black or white
+  const mx = Math.max(...key), dom = key.indexOf(mx);
+  const others = [0, 1, 2].filter(c => c !== dom);
+  const spill = mx - Math.max(key[others[0]], key[others[1]]) > 60;
+  for (let i = 0; i < d.length; i += 4) {
+    const dr = d[i] - key[0], dg = d[i + 1] - key[1], db = d[i + 2] - key[2];
+    const dist = Math.sqrt(dr * dr + dg * dg + db * db) / 441.67;
+    const a = dist <= tol ? 0 : dist >= tol + soft ? 1 : (dist - tol) / soft;
+    if (spill && dist < tol + soft * 2) {
+      const m = Math.max(d[i + others[0]], d[i + others[1]]);
+      if (d[i + dom] > m) d[i + dom] = m;
+    }
+    d[i + 3] = d[i + 3] * a;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+async function currentStill() {
+  // returns a drawable for the frame the user is looking at
+  if (!src) return null;
+  if (src.kind === 'video') return vid;
+  return src.first;
+}
+function averageCorners(ctx, W, H) {
+  const s = Math.max(2, Math.round(Math.min(W, H) * 0.04)); let r = 0, g = 0, b = 0, n = 0;
+  for (const [x, y] of [[0, 0], [W - s, 0], [0, H - s], [W - s, H - s]]) {
+    const d = ctx.getImageData(x, y, s, s).data;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+  }
+  return [r / n, g / n, b / n];
+}
+$('#v-key-auto').addEventListener('click', async () => {
+  const still = await currentStill(); if (!still) return;
+  const W = 160, H = Math.max(2, Math.round(src.h * W / src.w));
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(still, 0, 0, W, H);
+  $('#v-key').value = rgbToHex(...averageCorners(x, W, H));
+  previewStill();
+});
+
+let stillTimer = null;
+function previewStill() {
+  clearTimeout(stillTimer);
+  stillTimer = setTimeout(async () => {
+    const still = await currentStill(); if (!still) return;
+    if (players['v-play']) { players['v-play'].destroy(); delete players['v-play']; }
+    const W = Math.min(480, src.w), H = Math.round(src.h * W / src.w);
+    const c = document.createElement('canvas'); c.width = W; c.height = H; c.className = 'still';
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(still, 0, 0, W, H);
+    if (keyOn()) applyKey(x, W, H);
+    const box = $('#v-play'); box.innerHTML = ''; box.append(c);
+    $('#v-meta2').textContent = 'still preview';
+    if (vidResult) setStatus($('#v-status'), 'Settings changed. Convert again to update the Lottie.');
+  }, 120);
+}
+
+/* ---------- loading ---------- */
+function loadVideoFrom(url) {
+  return new Promise((res, rej) => {
+    const ok = () => { cleanup(); res(); }, bad = () => { cleanup(); rej(new Error('decode')); };
+    const cleanup = () => { vid.removeEventListener('loadeddata', ok); vid.removeEventListener('error', bad); };
+    vid.addEventListener('loadeddata', ok); vid.addEventListener('error', bad);
+    vid.src = url; vid.load();
+  });
+}
+function seek(t) {
+  return new Promise(res => {
+    const done = () => { vid.removeEventListener('seeked', done); clearTimeout(to); res(); };
+    const to = setTimeout(done, 4000);
+    vid.addEventListener('seeked', done); vid.currentTime = t;
+  });
+}
+function detectAlpha(drawable, w, h) {
+  const W = 128, H = Math.max(2, Math.round(h * W / w));
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(drawable, 0, 0, W, H);
+  const d = x.getImageData(0, 0, W, H).data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 250) return true;
+  return false;
+}
+
+function resetVideoUi() {
+  vidResult = null;
+  $('#v-dl').disabled = $('#v-send').disabled = true;
+  ['#v-after', '#v-frames', '#v-gzip'].forEach(id => $(id).textContent = '–'); $('#v-meta2').textContent = '';
+  $('#v-bar').style.width = '0';
+  $('#v-fallback').hidden = true;
+}
+function showFallback(kind) {
+  $('#v-fallback-text').textContent = kind === 'nodecode'
+    ? "Your browser can't open this file. Transparent .mov files are usually ProRes 4444, which most browsers can't play."
+    : "No transparency found. If this .mov should be transparent, your browser may be dropping it. The built-in converter reads the file directly.";
+  $('#v-fallback').hidden = false;
+}
+
+async function handleVideoFile(file) {
+  if (!file) return;
+  vidFile = file; src = null; resetVideoUi();
+  $('#v-name').textContent = 'Loading ' + file.name + '…';
+  $('#v-before').textContent = fmtBytes(file.size);
+  let ok = false;
+  try {
+    try { await loadVideoFrom(URL.createObjectURL(file)); }
+    catch { // some sandboxes refuse blob: media; a data: URL is the fallback
+      const dataUrl = await new Promise((r, j) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.onerror = j; fr.readAsDataURL(file); });
+      await loadVideoFrom(dataUrl);
+    }
+    ok = vid.videoWidth > 0;
+  } catch { ok = false; }
+  if (!ok) {
+    $('#v-name').textContent = 'Could not play ' + file.name;
+    $('#v-vidbox').innerHTML = '<p class="placeholder">This browser can\'t play the file. Use the converter on the left.</p>';
+    setStatus($('#v-status'), 'This video format is not supported by your browser.', 'warn');
+    showFallback('nodecode'); setAlphaBadge();
+    return;
+  }
+  await seek(Math.min(0.1, vid.duration / 2));
+  src = { kind: 'video', w: vid.videoWidth, h: vid.videoHeight, duration: vid.duration, alpha: detectAlpha(vid, vid.videoWidth, vid.videoHeight) };
+  afterSourceReady(file);
+  $('#v-vidbox').innerHTML = ''; $('#v-vidbox').append(vid); vid.play().catch(() => {});
+  if (!src.alpha && /\.mov$/i.test(file.name)) showFallback('noalpha');
+}
+
+function afterSourceReady(file) {
+  $('#v-name').textContent = 'Loaded: ' + file.name;
+  $('#v-meta1').textContent = `${src.w}×${src.h}` + (src.duration ? ` · ${src.duration.toFixed(1)}s` : '') + (src.alpha ? ' · alpha' : '');
+  $('#v-start').value = 0; $('#v-end').value = src.duration ? src.duration.toFixed(1) : 0;
+  if (src.duration) $('#v-end').max = src.duration.toFixed(1);
+  setStatus($('#v-status'), 'Adjust the settings, then convert.');
+  setAlphaBadge(); updateEstimate();
+  $('#v-play').innerHTML = '<p class="placeholder">Each kept frame becomes a compressed image inside the Lottie JSON.</p>';
+  if (keyOn()) previewStill();
+}
+wireDrop('#v-drop', '#v-file', handleVideoFile);
+
+/* ---------- built-in converter (ffmpeg.wasm), loaded on demand ---------- */
+function loadScript(url) {
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = url; s.onload = res; s.onerror = () => rej(new Error('blocked')); document.head.append(s); });
+}
+let ffLog = [];
+// ffmpeg's built-in VP8/VP9 decoders drop the alpha channel; libvpx keeps it
+const ffDecoder = () => /\.webm$/i.test(src.name) ? ['-c:v', 'libvpx-vp9'] : [];
+async function getFF(fresh) {
+  if (ff && !fresh) return ff;
+  if (ff) { try { ff.exit(); } catch {} ff = null; }
+  if (!window.FFmpeg) await loadScript(FF_JS);
+  const inst = FFmpeg.createFFmpeg({ corePath: FF_CORE, mainName: 'main', log: false });
+  inst.setLogger(({ message }) => { ffLog.push(message); if (ffLog.length > 400) ffLog.shift(); });
+  await inst.load();
+  ff = inst;
+  return ff;
+}
+async function ffRun(args) {
+  // one retry with a fresh instance: the single-thread core sometimes refuses a second command
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const inst = await getFF(attempt > 0);
+      try { inst.FS('stat', src.name); } catch { inst.FS('writeFile', src.name, src.bytes); }
+      ffLog = [];
+      await inst.run(...args);
+      return inst;
+    } catch (e) { if (attempt === 1) throw e; }
+  }
+}
+
+$('#v-ff').addEventListener('click', async () => {
+  if (!vidFile) return;
+  const btn = $('#v-ff'); btn.disabled = true;
+  setStatus($('#v-status'), 'Downloading the converter (about 25 MB, one time)…');
+  try {
+    const ext = ((vidFile.name.match(/\.[^.]+$/) || ['.mov'])[0]).toLowerCase();
+    src = { kind: 'ffmpeg', name: 'input' + ext, bytes: new Uint8Array(await vidFile.arrayBuffer()) };
+    await getFF();
+    setStatus($('#v-status'), 'Reading the video…');
+    const inst = await ffRun([...ffDecoder(), '-i', src.name, '-frames:v', '1', '-pix_fmt', 'rgba', 'first.png']);
+    const png = inst.FS('readFile', 'first.png'); inst.FS('unlink', 'first.png');
+    const bmp = await createImageBitmap(new Blob([png], { type: 'image/png' }));
+    const log = ffLog.join('\n');
+    const m = log.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+    src.w = bmp.width; src.h = bmp.height; src.first = bmp;
+    src.duration = m ? (+m[1] * 3600 + +m[2] * 60 + +m[3]) : 0;
+    src.alpha = detectAlpha(bmp, bmp.width, bmp.height);
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height; c.className = 'still';
+    c.getContext('2d').drawImage(bmp, 0, 0);
+    $('#v-vidbox').innerHTML = ''; $('#v-vidbox').append(c);
+    $('#v-fallback').hidden = true;
+    afterSourceReady(vidFile);
+    $('#v-meta1').textContent += ' · first frame';
+  } catch (e) {
+    src = null;
+    setStatus($('#v-status'), "The converter couldn't load here. Open your hosted copy of Lottie Squeeze, or convert to WebM with the command below.", 'warn');
+    $('#v-cmdbox').hidden = false;
+  } finally { btn.disabled = false; }
+});
+$('#v-copy').addEventListener('click', () => {
+  const text = $('#v-cmd').textContent;
+  const done = () => { $('#v-copy').textContent = 'Copied'; setTimeout(() => $('#v-copy').textContent = 'Copy', 1500); };
+  navigator.clipboard.writeText(text).then(done, () => { const r = document.createRange(); r.selectNodeContents($('#v-cmd')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); });
+});
+
+/* ---------- conversion ---------- */
+async function convertVideo() {
+  if (!src) return;
+  cancelFlag = false;
+  $('#v-go').disabled = true; $('#v-cancel').hidden = false; $('#v-dl').disabled = $('#v-send').disabled = true;
+  vid.pause();
+  const fps = +$('#v-fps').value, q = +$('#v-q').value / 100, thr = +$('#v-dedupe').value / 100;
+  const alpha = needAlpha();
+  let fmt = $('#v-fmt').value; if (alpha && fmt === 'jpeg') fmt = 'webp';
+  const start = Math.max(0, +$('#v-start').value || 0);
+  const end = src.duration ? Math.min(src.duration, +$('#v-end').value || src.duration) : (+$('#v-end').value || 0);
+  const scale = Math.min(1, +$('#v-width').value / src.w);
+  const W = Math.max(2, Math.round(src.w * scale)), H = Math.max(2, Math.round(src.h * scale));
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const cx = cv.getContext('2d', { willReadFrequently: true });
+  const TS = 64, sm = document.createElement('canvas'); sm.width = sm.height = TS; const sx = sm.getContext('2d', { willReadFrequently: true });
+  const frames = []; let prev = null, total = 0, getFrame;
+  try {
+    if (src.kind === 'video') {
+      total = Math.max(1, Math.floor((end - start) * fps));
+      getFrame = async i => { await seek(Math.min(start + i / fps + 0.0001, src.duration - 0.001)); return vid; };
+    } else {
+      setStatus($('#v-status'), 'Extracting frames with the converter…');
+      const args = ['-ss', String(start)];
+      if (end > start) args.push('-t', String(end - start));
+      args.push(...ffDecoder(), '-i', src.name, '-vf', `fps=${fps},scale=${W}:${H}:flags=lanczos`, '-pix_fmt', 'rgba', 'f_%05d.png');
+      const inst = await ffRun(args);
+      const files = inst.FS('readdir', '/').filter(f => /^f_\d+\.png$/.test(f)).sort();
+      if (!files.length) throw new Error('no frames were decoded');
+      total = files.length;
+      getFrame = async i => { const data = inst.FS('readFile', files[i]); inst.FS('unlink', files[i]); return createImageBitmap(new Blob([data], { type: 'image/png' })); };
+    }
+    for (let i = 0; i < total; i++) {
+      if (cancelFlag) throw new Error('cancelled');
+      const frame = await getFrame(i);
+      cx.clearRect(0, 0, W, H);
+      cx.drawImage(frame, 0, 0, W, H);
+      if (frame.close) frame.close();
+      if (keyOn()) applyKey(cx, W, H);
+      sx.clearRect(0, 0, TS, TS); sx.drawImage(cv, 0, 0, TS, TS);
+      const thumb = sx.getImageData(0, 0, TS, TS).data;
+      // share of thumbnail pixels that visibly changed, so small moving objects still count
+      let diff = 1;
+      if (prev) { let n = 0; for (let k = 0; k < thumb.length; k += 4) if (Math.max(Math.abs(thumb[k] - prev[k]), Math.abs(thumb[k + 1] - prev[k + 1]), Math.abs(thumb[k + 2] - prev[k + 2]), Math.abs(thumb[k + 3] - prev[k + 3])) > 24) n++; diff = n / (TS * TS); }
+      if (prev && diff < thr) frames[frames.length - 1].op = i + 1;
+      else { frames.push({ p: encode(cv, fmt, q, alpha), ip: i, op: i + 1 }); prev = thumb; }
+      $('#v-bar').style.width = ((i + 1) / total * 100) + '%';
+      setStatus($('#v-status'), `Capturing frame ${i + 1} of ${total} · ${frames.length} stored`);
+    }
+  } catch (e) {
+    $('#v-go').disabled = false; $('#v-cancel').hidden = true; $('#v-bar').style.width = '0';
+    setStatus($('#v-status'), e.message === 'cancelled' ? 'Conversion cancelled.' : 'Conversion failed: ' + e.message, 'warn');
+    return;
+  }
+  const ks = { o: { a: 0, k: 100 }, r: { a: 0, k: 0 }, p: { a: 0, k: [0, 0, 0] }, a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] } };
+  const anim = {
+    v: '5.7.4', fr: fps, ip: 0, op: total, w: W, h: H, nm: vidFile.name.replace(/\.[^.]+$/, ''), ddd: 0,
+    assets: frames.map((f, k) => ({ id: 'f' + k, w: W, h: H, u: '', p: f.p, e: 1 })),
+    layers: frames.map((f, k) => ({ ddd: 0, ind: k + 1, ty: 2, refId: 'f' + k, sr: 1, ks, ao: 0, ip: f.ip, op: f.op, st: 0, bm: 0 }))
+  };
+  const text = JSON.stringify(anim);
+  vidResult = { anim, text };
+  $('#v-after').textContent = fmtBytes(byteLen(text));
+  $('#v-frames').textContent = `${frames.length}/${total}`;
+  $('#v-gzip').textContent = '…'; gzipSize(text).then(g => $('#v-gzip').textContent = g ? fmtBytes(g) : 'n/a');
+  $('#v-meta2').textContent = metaText(anim) + (alpha ? ' · transparent' : '');
+  play('v-play', anim);
+  $('#v-bar').style.width = '100%';
+  $('#v-go').disabled = false; $('#v-cancel').hidden = true; $('#v-dl').disabled = $('#v-send').disabled = false;
+  const ratio = byteLen(text) / vidFile.size;
+  const note = alpha && $('#v-fmt').value === 'jpeg' ? ' Frames were saved as WebP to keep transparency.' : '';
+  setStatus($('#v-status'), (ratio > 1 ? `Done. The Lottie is ${ratio.toFixed(1)}× the video size; lower fps, width or quality to shrink it.` : 'Done. Preview on the right.') + note, ratio > 1 ? 'warn' : 'ok');
+  if (src.kind === 'video') vid.play().catch(() => {});
+}
+$('#v-go').addEventListener('click', convertVideo);
+$('#v-cancel').addEventListener('click', () => { cancelFlag = true; });
+$('#v-dl').addEventListener('click', () => { if (vidResult) saveJSON(vidResult.anim.nm + '.lottie.json', vidResult.text, $('#v-status')); });
+$('#v-send').addEventListener('click', () => {
+  if (!vidResult) return;
+  selectTab('opt');
+  $('#opt-name').textContent = 'Loaded: ' + vidResult.anim.nm + '.json (from video)';
+  loadOptSource(clone(vidResult.anim), vidResult.anim.nm + '.json', vidResult.text);
+});
+
+/* ---------- shared UI ---------- */
+function wireDrop(dropSel, inputSel, handler) {
+  const d = $(dropSel), inp = $(inputSel);
+  inp.addEventListener('change', () => { handler(inp.files[0]); inp.value = ''; });
+  d.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inp.click(); } });
+  ['dragenter', 'dragover'].forEach(t => d.addEventListener(t, e => { e.preventDefault(); d.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(t => d.addEventListener(t, e => { e.preventDefault(); d.classList.remove('over'); }));
+  d.addEventListener('drop', e => handler(e.dataTransfer.files[0]));
+}
+function selectTab(which) {
+  const isOpt = which === 'opt';
+  $('#tab-opt').setAttribute('aria-selected', isOpt); $('#tab-vid').setAttribute('aria-selected', !isOpt);
+  $('#panel-opt').hidden = !isOpt; $('#panel-vid').hidden = isOpt;
+  pushVisibleAds();
+  try { localStorage.setItem('ls-tab', which); } catch {}
+}
+$('#tab-opt').addEventListener('click', () => selectTab('opt'));
+$('#tab-vid').addEventListener('click', () => selectTab('vid'));
+try { if (localStorage.getItem('ls-tab') === 'vid') selectTab('vid'); } catch {}
+if (location.hash === '#video') selectTab('vid');
+
+/* ---------- ads ----------
+   To show Google AdSense ads: set enabled to true, put your publisher id in client,
+   and an ad unit id in each slot. A slot left empty keeps its placeholder.
+   Using another ad network instead? Paste its code inside the matching
+   <div class="ad" data-slot="..."> in the HTML and leave enabled false. */
+const ADS = {
+  enabled: false,
+  client: 'ca-pub-0000000000000000',
+  slots: { top: '', 'side-opt': '', 'side-vid': '', bottom: '' }
+};
+function fillAds() {
+  if (!ADS.enabled || !/^ca-pub-\d{16}$/.test(ADS.client) || /^ca-pub-0+$/.test(ADS.client)) return;
+  const s = document.createElement('script');
+  s.async = true; s.crossOrigin = 'anonymous';
+  s.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=' + ADS.client;
+  document.head.append(s);
+  document.querySelectorAll('.ad[data-slot]').forEach(el => {
+    const id = ADS.slots[el.dataset.slot]; if (!id) return;
+    const ins = document.createElement('ins');
+    ins.className = 'adsbygoogle'; ins.style.display = 'block';
+    ins.dataset.adClient = ADS.client; ins.dataset.adSlot = id;
+    ins.dataset.adFormat = el.classList.contains('rect') ? 'rectangle' : 'horizontal';
+    ins.dataset.fullWidthResponsive = 'true';
+    el.innerHTML = ''; el.classList.add('live'); el.append(ins);
+  });
+  pushVisibleAds();
+}
+// AdSense can't size an ad inside a hidden tab, so each one is requested when it first becomes visible
+function pushVisibleAds() {
+  document.querySelectorAll('.ad.live ins.adsbygoogle:not([data-pushed])').forEach(ins => {
+    if (ins.offsetParent === null) return;
+    ins.dataset.pushed = '1';
+    try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch {}
+  });
+}
+fillAds();
+
+/* boot with the example so the tool shows what it does */
+try { loadOptSource(makeSample(), 'sample-bounce.json', null); }
+catch (e) { setStatus($('#o-status'), e.message, 'warn'); }
+</script>
+
+</body></html>
