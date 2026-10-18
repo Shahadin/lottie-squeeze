@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lottie Squeeze — Compression Engine Audit</title>
+<style>
+@page { size: A4; margin: 16mm 15mm 18mm; }
+:root { --ink: #101413; --muted: #5f6866; --line: #dfe3e1; --accent: #0b8a76; --soft: #e6f4f1; --bad: #b3261e; --badsoft: #fbe9e7; --warn: #a35400; --warnsoft: #fdf1e2; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 10pt/1.5 "Segoe UI", Arial, sans-serif; color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+h1 { font-size: 22pt; letter-spacing: -0.02em; margin: 0 0 2mm; line-height: 1.15; }
+h2 { font-size: 13.5pt; margin: 7mm 0 2.5mm; padding-bottom: 1.5mm; border-bottom: 1.5px solid var(--ink); break-after: avoid; }
+h3 { font-size: 11pt; margin: 4.5mm 0 1.5mm; break-after: avoid; }
+p { margin: 0 0 2.5mm; }
+ul, ol { margin: 0 0 2.5mm; padding-left: 5mm; }
+li { margin-bottom: 1mm; }
+code { font-family: Consolas, monospace; font-size: 8.8pt; background: #f1f3f2; padding: 0 1mm; border-radius: 2px; }
+.head { display: flex; align-items: center; gap: 5mm; margin-bottom: 5mm; }
+.head svg { width: 15mm; height: 15mm; flex: none; }
+.sub { color: var(--muted); font-size: 10pt; }
+.verdict { border-left: 4px solid var(--bad); background: var(--badsoft); padding: 3.5mm 4.5mm; border-radius: 0 4px 4px 0; margin: 4mm 0; break-inside: avoid; }
+.verdict b.big { font-size: 12pt; display: block; margin-bottom: 1mm; }
+.note { border-left: 4px solid var(--accent); background: var(--soft); padding: 3mm 4mm; border-radius: 0 4px 4px 0; margin: 3mm 0; break-inside: avoid; }
+table { width: 100%; border-collapse: collapse; margin: 2mm 0 3.5mm; font-size: 8.8pt; break-inside: auto; }
+tr { break-inside: avoid; }
+th { text-align: left; background: #f1f3f2; font-weight: 600; }
+th, td { border: 1px solid var(--line); padding: 1.4mm 2mm; vertical-align: top; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ok { color: var(--accent); font-weight: 600; }
+.warn { color: var(--warn); font-weight: 600; }
+.bad { color: var(--bad); font-weight: 600; }
+.issue { border: 1px solid var(--line); border-radius: 4px; padding: 3mm 4mm; margin: 0 0 3mm; break-inside: avoid; }
+.issue h3 { margin-top: 0; }
+.tag { display: inline-block; font-size: 7.8pt; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: .3mm 1.8mm; border-radius: 10px; margin-left: 1.5mm; vertical-align: 1px; }
+.tag.crit { background: var(--badsoft); color: var(--bad); }
+.tag.med { background: var(--warnsoft); color: var(--warn); }
+.tag.low { background: #eef0ef; color: var(--muted); }
+.foot { margin-top: 8mm; padding-top: 2mm; border-top: 1px solid var(--line); color: var(--muted); font-size: 8.5pt; }
+.pb { break-before: page; }
+</style></head><body>
+
+<div class="head">
+  <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#101413"/><path d="M12.4 7.5 C 9.8 7.5, 10.2 10.8, 10.2 12.8 C 10.2 14.8, 9.4 16, 7.6 16 C 9.4 16, 10.2 17.2, 10.2 19.2 C 10.2 21.2, 9.8 24.5, 12.4 24.5" fill="none" stroke="#f6f7f6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.6 7.5 C 22.2 7.5, 21.8 10.8, 21.8 12.8 C 21.8 14.8, 22.6 16, 24.4 16 C 22.6 16, 21.8 17.2, 21.8 19.2 C 21.8 21.2, 22.2 24.5, 19.6 24.5" fill="none" stroke="#f6f7f6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><ellipse cx="16" cy="16" rx="3" ry="5.6" fill="#3fd6bb"/></svg>
+  <div>
+    <h1>Lottie Squeeze: Compression Engine Audit</h1>
+    <div class="sub">Code review and measured benchmark of the browser-based Lottie compressor · 18 October 2026</div>
+  </div>
+</div>
+
+<div class="verdict">
+  <b class="big">Verdict: Not ready for professional release yet.</b>
+  <ul style="margin:0">
+    <li><b>What works:</b> the default settings give real, measurable savings (20–89% on the test files). On the vector-only test files, the output is visually indistinguishable from the original.</li>
+    <li><b>What's wrong:</b> four bugs can silently damage files: a broken animation, lost transparency, garbage output at low precision, and broken mobile theming.</li>
+    <li><b>Effort to fix:</b> all four are small, low-risk fixes in one file. After those fixes the tool moves to <b>Ready with limitations</b>.</li>
+  </ul>
+</div>
+<p>No application code was changed during this audit. Every finding comes from reading the code and running the real engine.</p>
+
+<h2>How the testing was done</h2>
+<ul>
+  <li><b>Harness:</b> <code>audit/harness.html</code> loads the actual app in a hidden frame and calls its own <code>optimizeLottie()</code>, <code>readDotLottie()</code> and <code>handleLottieFile()</code>. It does not use a copy of the logic.</li>
+  <li><b>Visual check:</b> each original and compressed animation is rendered with lottie-web 5.12.2 (canvas renderer), and every frame is compared pixel by pixel. Rendering the original against itself gives exactly 0 difference, so every difference reported comes from the compressor.</li>
+  <li><b>Score:</b> "% pixels changed" is the share of pixels in the worst frame that differ by more than 16 out of 255 in any colour channel.</li>
+</ul>
+<div class="note"><b>Coverage gap.</b> No real After Effects or LottieFiles exports were available. The five test files are synthetic, generated to look like AE exports (numbers with 15–17 digits). Not covered: text layers, effects, 3D layers, audio, the SVG renderer (used by the preview), and Android/iOS players. Treat every number in this report as measured on these test files only.</div>
+
+<h2>A. What actually works</h2>
+<table>
+  <tr><th>Feature</th><th>Status</th><th>Evidence</th></tr>
+  <tr><td>Whitespace minification</td><td class="ok">Works</td><td>Output is always single-line JSON</td></tr>
+  <tr><td>Decimal precision setting</td><td class="warn">Works, but rounds every number the same way (B3)</td><td><code>cleanTree()</code>, line 576</td></tr>
+  <tr><td>Remove metadata and names (<code>meta, nm, mn, ix, cix, cl, ln</code>)</td><td class="ok">Works; skipped automatically when expressions are found</td><td>179 → 0 names in the multi-layer test; names kept in the expression test</td></tr>
+  <tr><td>Remove hidden layers and shapes</td><td class="warn">Works and keeps parent and matte layers, but breaks files with expressions (B1)</td><td>29 removed in the multi-layer test, 0.02% pixels changed</td></tr>
+  <tr><td>Remove unused precomps and images</td><td class="ok">Works, including nested precomps</td><td>1 unused precomp removed</td></tr>
+  <tr><td>Masks and track mattes kept</td><td class="ok">Verified</td><td>Gradients and masks test: pixel-identical at precision 3</td></tr>
+  <tr><td>Re-compress embedded images (WebP/JPEG, downscaling)</td><td class="warn">Works, only keeps the new image if smaller; Auto mode loses transparency (B2)</td><td>Images test: 280 KB → 30 KB</td></tr>
+  <tr><td>Read <code>.lottie</code> files (both folder layouts)</td><td class="ok">Works, images get embedded</td><td>10 ms to read a 210 KB file</td></tr>
+  <tr><td>Bezier path optimization</td><td class="bad">Not implemented</td><td>No code for it</td></tr>
+  <tr><td>Keyframe or easing optimization</td><td class="bad">Not implemented</td><td>No code for it</td></tr>
+  <tr><td>Removing default values</td><td class="bad">Not implemented</td><td>No code for it</td></tr>
+</table>
+<p>In short, the engine is a solid minifier with number rounding, structural cleanup and image re-encoding. It does no real animation-data optimization yet.</p>
+
+<h2>B. Critical issues</h2>
+
+<div class="issue"><h3>B1. Hidden layers are deleted even when expressions use them <span class="tag crit">Critical</span></h3>
+<ul>
+  <li><b>Cause:</b> <code>removeHidden()</code> (line 518) never checks whether the file has expressions.</li>
+  <li><b>Test:</b> an expression reading <code>thisComp.layer('Controller')</code> lost its hidden controller layer. Result: 13.9% of pixels wrong, and the card no longer rotated.</li>
+  <li><b>Why it matters:</b> hidden controller layers driven by expressions are common in professional rigs.</li>
+</ul></div>
+
+<div class="issue"><h3>B2. "Auto" image mode destroys transparency <span class="tag crit">Critical</span></h3>
+<ul>
+  <li><b>Cause:</b> <code>hasAlpha()</code> (line 503) only checks one pixel in four, so it misses transparency.</li>
+  <li><b>Test:</b> a photo with a scattered transparent edge went from 9,600 transparent pixels to 0. The holes became solid dark green, saved as JPEG.</li>
+  <li><b>Same check elsewhere:</b> it also decides whether a JPEG gets flattened onto white, and whether the WebP fallback keeps transparency.</li>
+</ul></div>
+
+<div class="issue"><h3>B3. Low precision settings produce garbage, and the slider allows them <span class="tag crit">Critical</span></h3>
+<p><b>Cause:</b> the slider goes down to 0 (line 253), and <code>cleanTree()</code> rounds every number the same way.</p>
+<table>
+  <tr><th></th><th>Original</th><th>Precision 1</th><th>Precision 0</th></tr>
+  <tr><td>Colour</td><td><code>[0.133, 0.451, 0.941]</code></td><td><code>[0.1, 0.5, 0.9]</code></td><td><code>[0, 0, 1]</code> (pure blue)</td></tr>
+  <tr><td>Overshoot easing (out x)</td><td>0.473</td><td>0.5</td><td>0 (easing gone)</td></tr>
+  <tr><td>Frame rate</td><td>29.97</td><td class="bad">30</td><td class="bad">30</td></tr>
+  <tr><td>End frame</td><td>89.91</td><td>89.9</td><td class="bad">90 (one extra frame)</td></tr>
+  <tr><td>Time remap end</td><td>2.966 s</td><td class="bad">3 s</td><td class="bad">3 s</td></tr>
+  <tr><td>Worst-frame % pixels changed</td><td>—</td><td>0.5–8.5%</td><td class="bad">17–31%</td></tr>
+</table>
+<p>Frame rate, frame times and time-remap values should never be rounded like positions are.</p></div>
+
+<div class="issue"><h3>B4. Name stripping is on by default and silently breaks developer features <span class="tag crit">Critical</span></h3>
+<ul>
+  <li>It removes every layer name.</li>
+  <li><b>What breaks:</b> colour and property changes done from code on Android, iOS and React Native (they find layers by name); any code that looks up layers by name; CSS that targets layer IDs or classes in lottie-web.</li>
+  <li><b>Why it's easy to miss:</b> none of this shows up in the preview, so the option looks harmless. Expression detection only protects files that use expressions.</li>
+</ul></div>
+
+<div class="issue"><h3>B5. Size figures that mislead <span class="tag med">Medium</span></h3>
+<ul>
+  <li><b>Example animation:</b> the "96.7% saved" compares against pretty-printed JSON (line 688), which was 4× bigger than minified JSON in the test files.</li>
+  <li><b><code>.lottie</code> input:</b> "before" is the zipped file size (line 753) while "after" is unzipped JSON. With images kept, a 210 KB <code>.lottie</code> becomes 280 KB of JSON, so the page shows about +33% instead of a saving.</li>
+  <li><b>No <code>.lottie</code> output:</b> the result cannot be saved back as <code>.lottie</code>.</li>
+  <li><b>No gzipped baseline:</b> only the gzipped size of the output is shown, not of the original.</li>
+</ul></div>
+
+<div class="issue"><h3>B6. Re-compressing an already compressed file keeps degrading its images <span class="tag med">Medium</span></h3>
+<ul>
+  <li>Three passes in a row raised the changed pixels from 6.1% → 7.8% → 9.0%.</li>
+  <li><b>How it happens:</b> the "Optimize further" button on the video tab, or someone re-uploading their output.</li>
+</ul></div>
+
+<div class="issue"><h3>B7. Wrong property count in shape groups after removing hidden shapes <span class="tag low">Low</span></h3>
+<ul>
+  <li>28 of 29 groups ended up with a property count (<code>np</code>) that no longer matches their contents.</li>
+  <li>lottie-web ignores it (no visual difference); other players are untested.</li>
+</ul></div>
+
+<h2>C. Missing capabilities</h2>
+<ol>
+  <li><b>Smarter rounding per property type:</b> e.g. 2 decimals for positions and paths, 3 for colours and easing, never rounding times or frame rate.</li>
+  <li><b>Keyframe optimization:</b> turn an animated property whose keyframes are all identical into a static value; drop redundant middle keyframes; drop easing on the last keyframe; drop zero spatial tangents.</li>
+  <li><b>Removing default values</b> such as <code>hd:false</code>, <code>bm:0</code>, <code>ddd:0</code>, <code>ao:0</code> (defaults need checking per player first).</li>
+  <li><b>Merging duplicate images and precomps.</b></li>
+  <li><b>Saving as <code>.lottie</code>:</b> a zip with images as separate files, usually the smallest format for delivery.</li>
+  <li><b>Removing dead layers:</b> layers entirely outside the timeline, or at 0% opacity the whole time.</li>
+  <li><b>Background processing (Web Worker),</b> cancelling stale runs, and caching decoded images.</li>
+  <li><b>A built-in "Verify" step</b> that compares frames like the harness does and shows a quality score.</li>
+  <li><b>Gzipped sizes before and after,</b> since servers send files gzipped.</li>
+</ol>
+<p><b>Compared with LottieFiles:</b> their optimizer was not run, because that would mean uploading test files to their service, so no parity or comparison is claimed. Publicly, their tool is described as offering precision reduction, removing unused data and converting to <code>.lottie</code>. Of those, this tool lacks <code>.lottie</code> output and per-property rounding.</p>
+
+<h2 class="pb">D. Benchmark results (measured)</h2>
+<h3>Default settings (precision 3, all options on, WebP quality 75)</h3>
+<table>
+  <tr><th>Test</th><th class="n">Original (minified)</th><th class="n">Output</th><th class="n">Saved</th><th class="n">Gzipped before → after</th><th class="n">Time</th><th>Plays</th><th class="n">Worst-frame % px changed</th></tr>
+  <tr><td>Simple vector</td><td class="n">2,398 B</td><td class="n">1,915 B</td><td class="n">20.1%</td><td class="n">665 → 469 B (29.5%)</td><td class="n">0.3 ms</td><td class="ok">Yes</td><td class="n">0.018%</td></tr>
+  <tr><td>31 layers + precomp</td><td class="n">59,207 B</td><td class="n">34,486 B</td><td class="n">41.8%</td><td class="n">11.7 → 4.9 KB (58.4%)</td><td class="n">1.8 ms</td><td class="ok">Yes</td><td class="n">0.022%</td></tr>
+  <tr><td>Gradients + masks + matte</td><td class="n">5,861 B</td><td class="n">3,753 B</td><td class="n">36.0%</td><td class="n">1.75 → 1.00 KB (42.8%)</td><td class="n">0.2 ms</td><td class="ok">Yes</td><td class="n">0 (identical)</td></tr>
+  <tr><td>Embedded images</td><td class="n">280,360 B</td><td class="n">29,962 B</td><td class="n">89.3%</td><td class="n">211 → 21 KB (90%)</td><td class="n">28 ms</td><td class="ok">Yes</td><td class="n">6.06% (lossy WebP)</td></tr>
+  <tr><td>Character (36 animated paths, 29.97 fps, expression)</td><td class="n">422,617 B</td><td class="n">192,695 B</td><td class="n">54.4%</td><td class="n">174 → 56 KB (67.7%)</td><td class="n">8.9 ms</td><td class="ok">Yes</td><td class="n">0.039%</td></tr>
+</table>
+
+<h3>Precision vs quality (worst-frame % pixels changed)</h3>
+<table>
+  <tr><th>Test</th><th class="n">Precision 3</th><th class="n">Precision 2</th><th class="n">Precision 1</th><th class="n">Precision 0</th></tr>
+  <tr><td>Simple</td><td class="n">0.018</td><td class="n">0.24</td><td class="n">0.51</td><td class="n bad">17.2</td></tr>
+  <tr><td>Multi-layer</td><td class="n">0.022</td><td class="n">2.16</td><td class="n">8.47</td><td class="n bad">21.7</td></tr>
+  <tr><td>Gradients + masks</td><td class="n">0</td><td class="n">0.33</td><td class="n">0.80</td><td class="n bad">31.4</td></tr>
+  <tr><td>Character</td><td class="n">0.039</td><td class="n">0.20</td><td class="n">0.99</td><td class="n bad">20.0</td></tr>
+</table>
+<ul>
+  <li><b>Size gain from lower precision:</b> going from precision 3 to 2 saved only 1–4 more percentage points of size.</li>
+  <li><b>Rounding alone:</b> with precision 5 and everything else off, savings were 0.8–47%, almost entirely from trimming long decimals; renders were practically identical.</li>
+</ul>
+
+<h3>Lossless vs lossy</h3>
+<ul>
+  <li><b>No visual change:</b> minifying and removing metadata, names and unused assets. Removing hidden layers also, except in files with expressions (B1). Removing names does break developer features (B4).</li>
+  <li><b>Lossy:</b> precision rounding and image re-encoding.</li>
+</ul>
+
+<h3>Large file and error handling</h3>
+<table>
+  <tr><th>Measurement</th><th>Result</th></tr>
+  <tr><td>Test file</td><td>16.4 MB, 1,479 layers</td></tr>
+  <tr><td>Read (JSON parse)</td><td>44 ms</td></tr>
+  <tr><td>Optimize</td><td>234 ms; output 7.4 MB</td></tr>
+  <tr><td>Page freeze in the real upload flow</td><td class="warn">0.8 s (longest gap 797 ms)</td></tr>
+  <tr><td>Memory growth</td><td>about 87 MB</td></tr>
+  <tr><td>Threading</td><td>All on the main thread; every slider change re-runs the whole pipeline, including image re-encoding</td></tr>
+  <tr><td>Invalid JSON / non-Lottie file</td><td class="ok">Clear messages</td></tr>
+  <tr><td>Corrupt <code>.lottie</code></td><td class="warn">Shows a raw technical zip error</td></tr>
+</table>
+
+<h2>E. Recommended changes (prioritized)</h2>
+<p>All changes are in <code>lottie-squeeze.html</code>; the standalone copy is generated from it.</p>
+<table>
+  <tr><th>#</th><th>Change</th><th>Functions</th><th>Impact</th><th>Effort</th><th>Risk</th></tr>
+  <tr><td><b>P1-1</b></td><td>Skip hidden-layer removal when expressions are found; keep layers used as mattes (<code>tp</code>); fix property counts</td><td><code>removeHidden()</code>, <code>optimizeLottie()</code></td><td>Fixes B1, B7</td><td>Low</td><td>Low</td></tr>
+  <tr><td><b>P1-2</b></td><td>Check every pixel for transparency, stopping at the first one found</td><td><code>hasAlpha()</code></td><td>Fixes B2</td><td>Low</td><td>Low</td></tr>
+  <tr><td><b>P1-3</b></td><td>Round each property type differently; never round frame rate or times; min 3 decimals for colours and easing; slider minimum 1</td><td><code>cleanTree()</code>, <code>#opt-prec</code></td><td>Fixes B3</td><td>Low–Med</td><td>Low</td></tr>
+  <tr><td><b>P1-4</b></td><td>Split names option: "Remove editor metadata" (safe, on) and "Remove layer names (breaks keypaths)" (off)</td><td>markup, <code>optOpts()</code>, <code>cleanTree()</code></td><td>Fixes B4</td><td>Low</td><td>Low</td></tr>
+  <tr><td><b>P1-5</b></td><td>Honest sizes: compare against minified JSON, handle <code>.lottie</code> correctly, show gzipped before and after</td><td><code>loadOptSource()</code>, <code>handleLottieFile()</code>, <code>runOptimize()</code>, <code>renderLog()</code></td><td>Fixes B5</td><td>Low</td><td>None</td></tr>
+  <tr><td><b>P1-6</b></td><td>Don't re-encode images already WebP/JPEG unless the format or scale changes</td><td><code>recompressImages()</code></td><td>Fixes B6</td><td>Low</td><td>Low</td></tr>
+  <tr><td>P2-7</td><td>Keyframe optimization pass, checked with the harness</td><td>new <code>optimizeKeyframes()</code></td><td>Bigger savings</td><td>Med</td><td>Med</td></tr>
+  <tr><td>P2-8</td><td>Merge duplicate images and precomps</td><td><code>removeUnusedAssets()</code></td><td>Bigger savings</td><td>Low</td><td>Low</td></tr>
+  <tr><td>P2-9</td><td>Save as <code>.lottie</code> (zip library already loaded)</td><td>new <code>saveDotLottie()</code></td><td>Biggest delivery win</td><td>Med</td><td>Low</td></tr>
+  <tr><td>P2-10</td><td>Lossless / Balanced / Maximum presets</td><td>UI + <code>optOpts()</code></td><td>Usability</td><td>Low</td><td>Low</td></tr>
+  <tr><td>P3-11</td><td>Background processing, cancelling stale runs, image cache</td><td><code>runOptimize()</code>, new worker</td><td>No freezes</td><td>Med</td><td>Med</td></tr>
+  <tr><td>P3-12</td><td>Built-in "Verify" quality score</td><td>harness logic</td><td>Trust</td><td>Med</td><td>Low</td></tr>
+  <tr><td>P3-13</td><td>Friendly error for corrupt <code>.lottie</code></td><td><code>handleLottieFile()</code></td><td>Polish</td><td>Low</td><td>None</td></tr>
+  <tr><td>P3-14</td><td>Test with real AE / LottieFiles exports, and on Android and iOS</td><td>—</td><td>Confidence</td><td>—</td><td>—</td></tr>
+</table>
+
+<h3>Compression presets (after the fixes)</h3>
+<table>
+  <tr><th>Mode</th><th>What it does</th><th>Trade-off</th></tr>
+  <tr><td><b>Lossless</b></td><td>Only changes that don't alter how the animation looks; names and timing kept</td><td>Smallest savings. The 0.8–47% above came from precision-5 rounding, so strict no-rounding savings will be lower (not measured).</td></tr>
+  <tr><td><b>Balanced</b> (default)</td><td>Per-property rounding, keyframe optimization, WebP quality 80 that keeps transparency, names kept</td><td>Should match or beat today's precision-3 results with less risk (not measured yet).</td></tr>
+  <tr><td><b>Maximum</b></td><td>Paths at 1 decimal, images at quality 60 and 75% size, names removed, <code>.lottie</code> output</td><td>Smallest files. Can show on heavily scaled-up precomps; images get softer.</td></tr>
+</table>
+
+<h2>F. Production readiness</h2>
+<table>
+  <tr><th>Stage</th><th>Rating</th><th>Why</th></tr>
+  <tr><td>Now</td><td class="bad">Not ready for professional use</td><td>B1 and B2 silently damage output with settings people will actually use; B4 breaks mobile developer features by default.</td></tr>
+  <tr><td>After P1 (six small fixes)</td><td class="warn">Ready with limitations</td><td>Safe for lottie-web on the web; verified on synthetic files only.</td></tr>
+  <tr><td>Professional grade</td><td>Needs P2-7, P2-9, P3-14</td><td>Keyframe optimization, <code>.lottie</code> output, and testing with real AE exports and mobile players.</td></tr>
+</table>
+<p>The harness is reproducible (fixed random seed), so the same benchmark can be re-run after each fix to prove nothing got worse.</p>
+
+<div class="foot">Lottie Squeeze · Compression engine audit · Measurements from <code>audit/harness.html</code>, lottie-web 5.12.2 canvas renderer, Chromium, synthetic test files.</div>
+</body></html>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Lottie Squeeze audit harness</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head><body>
+<p id="msg">Loading app…</p>
+<iframe id="app" style="width:900px;height:300px"></iframe>
+<script>
+/* The harness drives the REAL app: optimizeLottie, readDotLottie etc. are called inside the iframe.
+   ?app=baseline loads the protected pre-upgrade copy so before/after use identical fixtures. */
+const APP_VERSION = new URLSearchParams(location.search).get('app') === 'baseline' ? 'baseline' : 'current';
+const app = () => document.getElementById('app').contentWindow;
+const appReady = new Promise(r => document.getElementById('app').addEventListener('load', () => setTimeout(r, 800)));
+document.getElementById('app').src = (APP_VERSION === 'baseline' ? '../baseline/lottie-squeeze-standalone.baseline.html' : '../lottie-squeeze-standalone.html') + '?nocache=' + Date.now();
+
+/* ---------- seeded random so fixtures are reproducible ---------- */
+let seed = 1337;
+const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+const R = (a, b) => a + (b - a) * rnd();           // full double precision, like an After Effects export
+const st = k => ({ a: 0, k });
+const E = { i: { x: [0.667], y: [1] }, o: { x: [0.333], y: [0] } };
+const EOVR = { i: { x: [0.12], y: [1.735] }, o: { x: [0.473], y: [-0.284] } }; // overshoot curve
+const anim = (t, s, e = E) => ({ a: 1, k: [...t.map((tt, j) => ({ t: tt, s: s[j], i: clone(e.i), o: clone(e.o) })).slice(0, -1), { t: t[t.length - 1], s: s[s.length - 1] }] });
+const clone = o => JSON.parse(JSON.stringify(o));
+const ks = (p, extra = {}) => Object.assign({ o: st(100), r: st(0), p: st([...p, 0]), a: st([0, 0, 0]), s: st([100, 100, 100]) }, extra);
+const tr = () => ({ ty: 'tr', p: st([0, 0]), a: st([0, 0]), s: st([100, 100]), r: st(0), o: st(100), sk: st(0), sa: st(0), nm: 'Transform' });
+const shapeLayer = (ind, nm, k, shapes, op, extra = {}) => Object.assign({ ddd: 0, ind, ty: 4, nm, sr: 1, ks: k, ao: 0, shapes, ip: 0, op, st: 0, bm: 0 }, extra);
+const group = (nm, items) => ({ ty: 'gr', it: [...items, tr()], nm, np: items.length + 1, cix: 2, bm: 0, ix: 1, mn: 'ADBE Vector Group', hd: false });
+const fill = c => ({ ty: 'fl', c: st([...c, 1]), o: st(100), r: 1, bm: 0, nm: 'Fill 1', mn: 'ADBE Vector Graphic - Fill', hd: false });
+const blob = (n, r, cx = 0, cy = 0) => { const v = [], i = [], o = []; for (let j = 0; j < n; j++) { const a = j / n * Math.PI * 2, rr = r * R(0.75, 1.15); const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr; v.push([x, y]); const tx = -Math.sin(a) * rr * 0.35, ty = Math.cos(a) * rr * 0.35; i.push([-tx, -ty]); o.push([tx, ty]); } return { i, o, v, c: true }; };
+const root = (nm, w, h, fr, op, layers, assets = []) => ({ v: '5.7.4', fr, ip: 0, op, w, h, nm, ddd: 0, assets, layers, markers: [], meta: { g: 'LottieFiles AE 3.4.5', a: '', k: '', d: '', tc: '' } });
+
+/* ---------- fixtures ---------- */
+function fxSimple() {
+  const L = [
+    shapeLayer(1, 'Card', ks([200, 200], { r: anim([0, 30, 60], [[0], [12.5], [0]]), s: anim([0, 30, 60], [[100, 100, 100], [108.333333, 108.333333, 100], [100, 100, 100]]) }), [group('Rect', [{ ty: 'rc', d: 1, s: st([180.123456, 120.987654]), p: st([0, 0]), r: st(18.6666667), nm: 'Rect Path', mn: 'ADBE Vector Shape - Rect', hd: false }, fill([0.13333333, 0.45098039, 0.94117647])])], 60),
+    shapeLayer(2, 'Dot', ks([200, 200], { p: anim([0, 20, 40, 60], [[120.33, 200.77, 0], [280.49, 200.12, 0], [200.86, 130.04, 0], [120.33, 200.77, 0]], EOVR) }), [group('Ellipse', [{ ty: 'el', d: 1, s: st([40.5555, 40.5555]), p: st([0, 0]), nm: 'Ellipse Path 1', mn: 'ADBE Vector Shape - Ellipse', hd: false }, fill([1, 0.84313725, 0.2])])], 60)
+  ];
+  return root('simple', 400, 400, 30, 60, L);
+}
+function fxMultiLayer() {
+  const layers = [];
+  layers.push({ ddd: 0, ind: 1, ty: 3, nm: 'CTRL null', sr: 1, ks: ks([250, 250], { r: anim([0, 90], [[0], [360]]) }), ao: 0, ip: 0, op: 90, st: 0, bm: 0 });
+  layers.push({ ddd: 0, ind: 2, ty: 3, nm: 'Hidden guide', hd: true, sr: 1, ks: ks([0, 0]), ao: 0, ip: 0, op: 90, st: 0, bm: 0 });
+  for (let n = 0; n < 28; n++) {
+    const a = n / 28 * Math.PI * 2;
+    layers.push(shapeLayer(3 + n, 'Petal ' + n, ks([Math.cos(a) * R(90, 160), Math.sin(a) * R(90, 160)], { o: anim([0, 45, 90], [[R(30, 100)], [R(30, 100)], [R(30, 100)]]), s: anim([0, 45, 90], [[100, 100, 100], [R(60, 140), R(60, 140), 100], [100, 100, 100]]) }),
+      [group('Shape', [{ ty: 'sh', ks: st(blob(6, R(14, 28))), nm: 'Path 1', mn: 'ADBE Vector Shape - Group', hd: false }, fill([R(0, 1), R(0, 1), R(0, 1)]),
+        { ty: 'st', c: st([0, 0, 0, 1]), o: st(100), w: st(2), lc: 1, lj: 1, ml: 4, bm: 0, nm: 'Old stroke', hd: true }])], 90, { parent: 1 }));
+  }
+  layers.push({ ddd: 0, ind: 40, ty: 0, nm: 'Badge precomp', refId: 'comp_badge', sr: 1, ks: ks([250, 250]), ao: 0, w: 120, h: 120, ip: 0, op: 90, st: 0, bm: 0 });
+  const badge = { id: 'comp_badge', nm: 'Badge', layers: [shapeLayer(1, 'Badge circle', ks([60, 60], { s: anim([0, 45, 90], [[100, 100, 100], [120, 120, 100], [100, 100, 100]]) }), [group('C', [{ ty: 'el', d: 1, s: st([80, 80]), p: st([0, 0]) }, fill([0.9, 0.2, 0.35])])], 90)] };
+  const unused = { id: 'comp_unused', nm: 'Old intro', layers: [shapeLayer(1, 'x', ks([0, 0]), [], 90)] };
+  return root('multilayer', 500, 500, 30, 90, layers, [badge, unused]);
+}
+function fxGradMask() {
+  const gstops = (a) => [0, 0.98 * a, 0.2, 0.31, 0.5, 0.2, 0.6, 0.99, 1, 0.1, 0.83, 0.9, 0, 1, 1, 0.35];
+  const gf = { ty: 'gf', o: st(100), r: 1, bm: 0, g: { p: 3, k: { a: 1, k: [{ t: 0, s: gstops(1), i: E.i, o: E.o }, { t: 60, s: gstops(0.4) }] } }, s: st([-150, 0]), e: st([150, 0]), t: 1, nm: 'Gradient Fill 1', mn: 'ADBE Vector Graphic - G-Fill', hd: false };
+  const rg = { ty: 'gf', o: st(100), r: 1, bm: 0, g: { p: 2, k: st([0, 1, 1, 1, 1, 0.05, 0.05, 0.25]) }, s: st([0, 0]), e: st([120, 0]), t: 2, h: st(35.5), a: st(20), nm: 'Radial' };
+  const gs = { ty: 'gs', o: st(100), w: st(6), g: { p: 2, k: st([0, 1, 0.5, 0, 1, 0, 0.5, 1]) }, s: st([-100, 0]), e: st([100, 0]), t: 1, lc: 2, lj: 2, ml: 4, nm: 'Gradient Stroke' };
+  const maskPath = (t) => ({ a: 1, k: [{ t: 0, s: [blob(8, 140)], i: { x: 0.667, y: 1 }, o: { x: 0.333, y: 0 } }, { t: 60, s: [blob(8, 160)] }] });
+  const L = [
+    shapeLayer(1, 'Matte source', ks([250, 250], { r: anim([0, 60], [[0], [90]]) }), [group('M', [{ ty: 'rc', d: 1, s: st([260, 260]), p: st([0, 0]), r: st(40) }, fill([1, 1, 1])])], 60, { td: 1 }),
+    shapeLayer(2, 'Matted gradient', ks([250, 250]), [group('G', [{ ty: 'rc', d: 1, s: st([400, 400]), p: st([0, 0]), r: st(0) }, gf])], 60, { tt: 1 }),
+    shapeLayer(3, 'Masked radial', ks([250, 250]), [group('R', [{ ty: 'el', d: 1, s: st([300, 300]), p: st([0, 0]) }, rg, gs])], 60,
+      { hasMask: true, masksProperties: [{ inv: false, mode: 'a', pt: maskPath(), o: st(100), x: st(0), nm: 'Mask 1' }, { inv: true, mode: 's', pt: st(blob(6, 40)), o: st(80), x: st(4.5), nm: 'Mask 2' }] })
+  ];
+  return root('gradients-masks', 500, 500, 30, 60, L);
+}
+function makeImages() {
+  // photo-like opaque image
+  const c = document.createElement('canvas'); c.width = 320; c.height = 240; const x = c.getContext('2d');
+  const g = x.createLinearGradient(0, 0, 320, 240); g.addColorStop(0, '#2a6'); g.addColorStop(1, '#fc3'); x.fillStyle = g; x.fillRect(0, 0, 320, 240);
+  for (let i = 0; i < 4000; i++) { x.fillStyle = `rgba(${R(0, 255) | 0},${R(0, 255) | 0},${R(0, 255) | 0},0.35)`; x.fillRect(R(0, 320), R(0, 240), 3, 3); }
+  const photo = c.toDataURL('image/png');
+  // sprite with soft transparent edges
+  const c2 = document.createElement('canvas'); c2.width = c2.height = 200; const y = c2.getContext('2d');
+  const rg = y.createRadialGradient(100, 100, 10, 100, 100, 95); rg.addColorStop(0, 'rgba(255,90,60,1)'); rg.addColorStop(1, 'rgba(255,90,60,0)'); y.fillStyle = rg; y.fillRect(0, 0, 200, 200);
+  const sprite = c2.toDataURL('image/png');
+  // opaque image with sparse 1px transparent pixels at offsets the sampler skips (x % 4 = 1)
+  const c3 = document.createElement('canvas'); c3.width = c3.height = 120; const z = c3.getContext('2d');
+  z.fillStyle = '#3355cc'; z.fillRect(0, 0, 120, 120);
+  for (let yy = 0; yy < 120; yy += 2) for (let xx = 1; xx < 120; xx += 4) z.clearRect(xx, yy, 1, 1);
+  const sparse = c3.toDataURL('image/png');
+  return { photo, sprite, sparse };
+}
+function fxImages(imgs) {
+  const imgLayer = (ind, refId, p, extra = {}) => Object.assign({ ddd: 0, ind, ty: 2, nm: refId + '.png', cl: 'png', refId, sr: 1, ks: ks(p), ao: 0, ip: 0, op: 60, st: 0, bm: 0 }, extra);
+  const L = [
+    imgLayer(1, 'img_sparse', [60, 60], { ks: ks([340, 300], { a: st([60, 60, 0]) }) }),
+    imgLayer(2, 'img_sprite', [0, 0], { ks: ks([300, 160], { a: st([100, 100, 0]), r: anim([0, 60], [[0], [45]]) }) }),
+    imgLayer(3, 'img_photo', [0, 0], { ks: ks([200, 200], { a: st([160, 120, 0]) }) })
+  ];
+  return root('images', 400, 400, 30, 60, L, [
+    { id: 'img_photo', w: 320, h: 240, u: '', p: imgs.photo, e: 1 },
+    { id: 'img_sprite', w: 200, h: 200, u: '', p: imgs.sprite, e: 1 },
+    { id: 'img_sparse', w: 120, h: 120, u: '', p: imgs.sparse, e: 1 }
+  ]);
+}
+function fxCharacter() {
+  const fr = 29.9700012207031, op = 89.9100036621094;
+  const layers = [{ ddd: 0, ind: 1, ty: 3, nm: 'Body CTRL', sr: 1, ks: ks([300, 330], { p: anim([0, 14.985, 29.97, 44.955, 59.94, 74.925, 89.91], [[300, 330, 0], [300, 318.4, 0], [300, 330, 0], [300, 318.4, 0], [300, 330, 0], [300, 318.4, 0], [300, 330, 0]]) }), ao: 0, ip: 0, op, st: 0, bm: 0 }];
+  let ind = 2;
+  for (let part = 0; part < 36; part++) {
+    const base = blob(12, R(12, 46), 0, 0);
+    const keys = [0, 14.985, 29.97, 44.955, 59.94, 74.925, 89.91].map(() => ({ i: base.i.map(p => [p[0] * R(0.9, 1.1), p[1] * R(0.9, 1.1)]), o: base.o.map(p => [p[0] * R(0.9, 1.1), p[1] * R(0.9, 1.1)]), v: base.v.map(p => [p[0] + R(-3, 3), p[1] + R(-3, 3)]), c: true }));
+    const path = { ty: 'sh', ks: { a: 1, k: keys.map((s, j) => j < keys.length - 1 ? { t: [0, 14.985, 29.97, 44.955, 59.94, 74.925, 89.91][j], s: [s], i: { x: 0.667, y: 1 }, o: { x: 0.333, y: 0 } } : { t: 89.91, s: [s] }) }, nm: 'Path 1', mn: 'ADBE Vector Shape - Group', hd: false };
+    layers.push(shapeLayer(ind++, 'Part ' + part, ks([R(-160, 160), R(-200, 120)], { r: anim([0, 29.97, 59.94, 89.91], [[R(-8, 8)], [R(-8, 8)], [R(-8, 8)], [0]], EOVR) }), [group('G', [path, fill([R(0, 1), R(0, 1), R(0, 1)])])], op, { parent: 1 }));
+  }
+  // tiny detail precomp scaled up 800%: rounding errors get multiplied by 8 on screen
+  layers.push({ ddd: 0, ind: ind++, ty: 0, nm: 'Eye detail', refId: 'comp_eye', sr: 1, ks: ks([300, 150], { a: st([10, 10, 0]), s: st([800, 800, 100]) }), ao: 0, w: 20, h: 20, ip: 0, op, st: 0, bm: 0,
+    tm: { a: 1, k: [{ t: 0, s: [0], i: { x: [0.833], y: [0.833] }, o: { x: [0.167], y: [0.167] } }, { t: 89.91, s: [2.96629963296] }] } });
+  const eye = { id: 'comp_eye', nm: 'Eye', fr, layers: [shapeLayer(1, 'Pupil', ks([10, 10], { p: anim([0, 44.955, 89.91], [[10, 10, 0], [13.37, 9.12, 0], [10, 10, 0]]) }), [group('P', [{ ty: 'el', d: 1, s: st([4.3333, 4.3333]), p: st([0, 0]) }, fill([0.07, 0.07, 0.09])])], op)] };
+  // one expression-driven layer
+  layers.push(shapeLayer(ind++, 'Antenna (expression)', ks([300, 60], { r: { a: 0, k: 0, x: "var $bm_rt;\n$bm_rt = $bm_mul(Math.sin($bm_mul(time, 6)), 15);" } }), [group('A', [{ ty: 'rc', d: 1, s: st([6, 60]), p: st([0, 0]), r: st(3) }, fill([0.2, 0.2, 0.2])])], op));
+  return root('character', 600, 600, fr, op, layers, [eye]);
+}
+
+/* ---------- rendering + diff (lottie-web canvas renderer) ---------- */
+async function loadPlayer(data, size) {
+  const div = document.createElement('div'); div.style.cssText = `width:${size}px;height:${size}px;position:absolute;left:-5000px;top:0`; document.body.append(div);
+  const errors = [];
+  let a;
+  try {
+    a = lottie.loadAnimation({ container: div, renderer: 'canvas', loop: false, autoplay: false, animationData: clone(data), rendererSettings: { clearCanvas: true, dpr: 1 } });
+  } catch (e) { errors.push(String(e)); return { errors }; }
+  a.addEventListener('error', e => errors.push('error event'));
+  await new Promise(r => { let done = false; const fin = () => { if (!done) { done = true; r(); } }; a.addEventListener('DOMLoaded', () => setTimeout(fin, 50)); setTimeout(fin, 3000); });
+  // wait for images
+  await new Promise(r => { if (!data.assets || !data.assets.some(x => x.p && x.p.startsWith('data:'))) return r(); a.addEventListener('loaded_images', r); setTimeout(r, 3000); });
+  return { a, div, errors, canvas: div.querySelector('canvas') };
+}
+function frameData(p, f) {
+  p.a.goToAndStop(f, true);
+  const c = p.canvas; return c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+}
+async function visualDiff(orig, opt, opts = {}) {
+  const size = 300;
+  const P1 = await loadPlayer(orig, size), P2 = await loadPlayer(opt, size);
+  if (!P1.a || !P2.a || !P1.canvas || !P2.canvas) return { valid: false, errors: [...P1.errors, ...P2.errors] };
+  const frames = Math.ceil(orig.op - orig.ip);
+  let worst = { f: -1, mean: 0, pctPx: 0, max: 0 }, sumMean = 0, n = 0, durationOk = Math.abs(P1.a.totalFrames - P2.a.totalFrames) < 0.01 && P1.a.frameRate === P2.a.frameRate;
+  for (let f = 0; f < frames; f += (opts.step || 1)) {
+    const d1 = frameData(P1, f), d2 = frameData(P2, f);
+    let s = 0, cnt = 0, mx = 0;
+    for (let k = 0; k < d1.length; k += 4) {
+      const m = Math.max(Math.abs(d1[k] - d2[k]), Math.abs(d1[k + 1] - d2[k + 1]), Math.abs(d1[k + 2] - d2[k + 2]), Math.abs(d1[k + 3] - d2[k + 3]));
+      s += m; if (m > 16) cnt++; if (m > mx) mx = m;
+    }
+    const mean = s / (d1.length / 4), pct = cnt / (d1.length / 4) * 100;
+    sumMean += mean; n++;
+    if (pct > worst.pctPx || (pct === worst.pctPx && mean > worst.mean)) worst = { f, mean: +mean.toFixed(3), pctPx: +pct.toFixed(3), max: mx };
+  }
+  const res = { valid: P2.errors.length === 0, errors: P2.errors, frames: n, avgMeanDiff: +(sumMean / n).toFixed(3), worst,
+    timing: { origTotalFrames: P1.a.totalFrames, optTotalFrames: P2.a.totalFrames, origFps: P1.a.frameRate, optFps: P2.a.frameRate, same: durationOk } };
+  P1.a.destroy(); P2.a.destroy(); P1.div.remove(); P2.div.remove();
+  return res;
+}
+
+/* ---------- test runner ---------- */
+const DEFAULTS = { prec: 3, names: true, hidden: true, unused: true, ifmt: 'webp', iq: 0.75, iscale: 1 };
+const LOSSLESS_ISH = { prec: 5, names: false, hidden: false, unused: false, ifmt: 'keep', iq: 0.75, iscale: 1 };
+async function measure(name, fx, o, label) {
+  const W = app();
+  const minified = JSON.stringify(fx), pretty = JSON.stringify(fx, null, 2);
+  const t0 = performance.now();
+  const r = await W.optimizeLottie(fx, o);
+  const ms = performance.now() - t0;
+  const out = r.text;
+  const bytes = s => new Blob([s]).size;
+  const g1 = await W.gzipSize(minified), g2 = await W.gzipSize(out);
+  let reparsed = true; try { JSON.parse(out); } catch { reparsed = false; }
+  const vis = await visualDiff(fx, r.anim);
+  return { test: name, settings: label, origMinified: bytes(minified), origPretty: bytes(pretty), out: bytes(out),
+    savedVsMinified: +((1 - bytes(out) / bytes(minified)) * 100).toFixed(1), gzipOrig: g1, gzipOut: g2, savedGzip: +((1 - g2 / g1) * 100).toFixed(1),
+    ms: +ms.toFixed(1), json: reparsed, hasExpr: r.hasExpr, stats: r.stats, visual: vis, outAnim: r.anim };
+}
+window.runAll = async function () {
+  await appReady;
+  seed = 1337;
+  const imgs = makeImages();
+  const fixtures = { simple: fxSimple(), multilayer: fxMultiLayer(), 'gradients-masks': fxGradMask(), images: fxImages(imgs), character: fxCharacter() };
+  window.FX = fixtures;
+  const results = [];
+  for (const [name, fx] of Object.entries(fixtures)) {
+    results.push(await measure(name, fx, DEFAULTS, 'default (prec 3)'));
+    results.push(await measure(name, fx, { ...DEFAULTS, prec: 2 }, 'prec 2'));
+    results.push(await measure(name, fx, { ...DEFAULTS, prec: 1 }, 'prec 1'));
+    results.push(await measure(name, fx, { ...DEFAULTS, prec: 0 }, 'prec 0'));
+    results.push(await measure(name, fx, LOSSLESS_ISH, 'least lossy (prec 5, all off)'));
+  }
+  // renderer noise baseline: original vs itself
+  results.push({ test: 'baseline', settings: 'orig vs orig', visual: await visualDiff(fixtures.character, fixtures.character) });
+  window.RESULTS = results;
+  document.getElementById('msg').textContent = 'done';
+  return results.map(r => ({ ...r, outAnim: undefined }));
+};
+</script>
+<script>document.write('<script src="harness-v2.js?nocache=' + Date.now() + '"><\/script>');</script>
+</body></html>

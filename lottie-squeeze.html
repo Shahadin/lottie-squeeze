@@ -113,6 +113,7 @@ body {
 .field label { font-size: 13.5px; font-weight: 500; }
 .field output { font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--sunk); padding: 1px 7px; border-radius: 6px; font-variant-numeric: tabular-nums; }
 .hint { font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.45; }
+.warnline { color: var(--warn) !important; }
 input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 18px; background: transparent; --p: 50%; cursor: pointer; }
 input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(var(--accent), var(--accent)) 0 / var(--p) 100% no-repeat, var(--sunk); }
 input[type="range"]::-moz-range-track { height: 4px; border-radius: 4px; background: var(--sunk); }
@@ -250,11 +251,12 @@ details.log[open] summary::after { content: "−"; }
           <h2>Animation data</h2>
           <div class="field">
             <div class="top"><label for="opt-prec">Decimal precision</label><output id="opt-prec-out">3</output></div>
-            <input type="range" id="opt-prec" min="0" max="5" step="1" value="3">
-            <p class="hint">2–3 decimals look identical for most files.</p>
+            <input type="range" id="opt-prec" min="1" max="5" step="1" value="3">
+            <p class="hint" id="opt-prec-hint">Applies to shapes and positions. Timing is never rounded; colours and easing keep at least 3 decimals.</p>
           </div>
-          <label class="toggle"><span><b>Strip names &amp; metadata</b><small>Kept automatically if the file uses expressions.</small></span><input type="checkbox" class="switch" id="opt-names" checked></label>
-          <label class="toggle"><span><b>Remove hidden layers</b><small>Guides and anything switched off.</small></span><input type="checkbox" class="switch" id="opt-hidden" checked></label>
+          <label class="toggle"><span><b>Remove editor metadata</b><small>After Effects match names and export info. Kept if the file uses expressions.</small></span><input type="checkbox" class="switch" id="opt-meta" checked></label>
+          <label class="toggle"><span><b>Remove layer names</b><small class="warnline">Breaks keypaths, dynamic colours and code that finds layers by name.</small></span><input type="checkbox" class="switch" id="opt-names"></label>
+          <label class="toggle"><span><b>Remove hidden layers</b><small>Kept when other layers or expressions could use them.</small></span><input type="checkbox" class="switch" id="opt-hidden" checked></label>
           <label class="toggle"><span><b>Remove unused assets</b><small>Precomps and images nothing uses.</small></span><input type="checkbox" class="switch" id="opt-unused" checked></label>
         </div>
         <div class="group">
@@ -262,9 +264,9 @@ details.log[open] summary::after { content: "−"; }
           <div class="field">
             <label for="opt-ifmt">Format</label>
             <select id="opt-ifmt">
-              <option value="auto">Auto (JPEG if opaque, else WebP)</option>
+              <option value="auto">Auto (JPEG if opaque, WebP if transparent)</option>
               <option value="webp" selected>WebP</option>
-              <option value="jpeg">JPEG (drops transparency)</option>
+              <option value="jpeg">JPEG (opaque images only)</option>
               <option value="keep">Keep original</option>
             </select>
           </div>
@@ -281,6 +283,7 @@ details.log[open] summary::after { content: "−"; }
               <option value="0.35">35%</option>
             </select>
           </div>
+          <label class="toggle"><span><b>Re-compress JPEG/WebP images</b><small>Off: images that are already compressed are left alone, so repeat passes don't lose quality.</small></span><input type="checkbox" class="switch" id="opt-reencode"></label>
         </div>
       </div>
       <!-- AD SLOT: sidebar rectangle on the Optimize tab (300×250) -->
@@ -289,10 +292,10 @@ details.log[open] summary::after { content: "−"; }
 
     <div class="card stage">
       <div class="metrics" aria-live="polite">
-        <div class="metric"><span>Original</span><b id="o-before">–</b></div>
+        <div class="metric"><span id="o-before-label">Original</span><b id="o-before">–</b></div>
         <div class="metric"><span>Optimized</span><b id="o-after">–</b></div>
-        <div class="metric win"><span>Saved</span><b id="o-saved">–</b></div>
-        <div class="metric"><span>Gzipped</span><b id="o-gzip">–</b></div>
+        <div class="metric win"><span id="o-saved-label">Saved</span><b id="o-saved">–</b></div>
+        <div class="metric"><span id="o-gzip-label">Gzipped</span><b id="o-gzip">–</b></div>
       </div>
       <div class="compare">
         <div class="pane"><h3>Original <em id="o-meta1"></em></h3><div class="player"><div id="o-play1"></div></div></div>
@@ -498,10 +501,27 @@ function encode(canvas, fmt, q, keepAlpha) {
   if (fmt === 'webp' && !url.startsWith('data:image/webp')) url = keepAlpha ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', q);
   return url;
 }
+// Every pixel is checked: a single transparent pixel means the image needs an alpha-capable format
 function hasAlpha(ctx, w, h) {
   const d = ctx.getImageData(0, 0, w, h).data;
-  for (let i = 3; i < d.length; i += 16) if (d[i] < 255) return true;
+  for (let i = 3; i < d.length; i += 4) if (d[i] !== 255) return true;
   return false;
+}
+// Decode a candidate and measure it against the pixels it should reproduce
+async function imageError(refCtx, w, h, candidateUrl) {
+  const img = await loadImg(candidateUrl);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, w, h);
+  const a = refCtx.getImageData(0, 0, w, h).data, b = x.getImageData(0, 0, w, h).data;
+  let alphaMax = 0, alphaChanged = 0, colorSum = 0, colorWeight = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    const da = Math.abs(a[i + 3] - b[i + 3]);
+    if (da > alphaMax) alphaMax = da;
+    if (da > 2) alphaChanged++;
+    const wgt = a[i + 3] / 255;   // colour only matters where the pixel is visible
+    if (wgt > 0) { colorSum += wgt * (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2])) / 3; colorWeight += wgt; }
+  }
+  return { alphaMax, alphaChanged, colorMean: colorWeight ? colorSum / colorWeight : 0 };
 }
 
 /* ---------- optimizer ---------- */
@@ -515,18 +535,52 @@ function detectExpressions(node) {
   return found;
 }
 
-function removeHidden(anim, stats) {
-  const filterShapes = arr => arr.filter(s => {
-    if (s && s.hd === true) { stats.hidden++; return false; }
-    if (s && Array.isArray(s.it)) s.it = filterShapes(s.it);
-    return true;
+// Layers in one composition that other layers depend on: parents, matte sources and matte parents
+function layerDependencies(layers) {
+  const keep = new Set();
+  layers.forEach((l, i) => {
+    if (l.parent != null) keep.add(l.parent);
+    if (l.tp != null) keep.add(l.tp);                                  // matte parent (Lottie 5.12+)
+    if (l.tt && l.tp == null && i > 0) keep.add(layers[i - 1].ind);   // legacy matte: the layer directly above
   });
+  return keep;
+}
+function hasLayerControl(layers) {
+  let found = false;
+  (function walk(n) {
+    if (found || !n || typeof n !== 'object') return;
+    if (n.ty === 10 && 'v' in n) { found = true; return; }  // effect "Layer Control": points at a layer by index
+    for (const k in n) walk(n[k]);
+  })(layers.map(l => l.ef || []));
+  return found;
+}
+
+// Conservative: a hidden layer is removed only when nothing can reference it.
+// Expressions can reach any layer or shape by name or index, so any expression disables removal.
+function removeHidden(anim, stats, hasExpr) {
+  if (hasExpr) { stats.hiddenSkipped = 'expressions'; return; }
+  const filterShapes = arr => {
+    let removed = 0;
+    const list = arr.filter(s => {
+      if (s && s.hd === true) { removed++; return false; }
+      if (s && Array.isArray(s.it)) {
+        const r = filterShapes(s.it);
+        s.it = r.list;
+        if (r.removed && typeof s.np === 'number') s.np = Math.max(0, s.np - r.removed); // keep the property count true
+      }
+      return true;
+    });
+    stats.hiddenShapes += removed;
+    return { list, removed };
+  };
   const filterLayers = layers => {
-    const parents = new Set(layers.map(l => l.parent).filter(p => p != null));
-    return layers.filter((l, i) => {
-      const nextUsesMatte = layers[i + 1] && layers[i + 1].tt;
-      if (l.hd === true && !l.td && !nextUsesMatte && !parents.has(l.ind)) { stats.hidden++; return false; }
-      if (Array.isArray(l.shapes)) l.shapes = filterShapes(l.shapes);
+    const deps = layerDependencies(layers), lockAll = hasLayerControl(layers);
+    return layers.filter(l => {
+      if (l.hd === true) {
+        if (lockAll || l.td || l.ind == null || deps.has(l.ind)) stats.hiddenKept++;
+        else { stats.hidden++; return false; }
+      }
+      if (Array.isArray(l.shapes)) l.shapes = filterShapes(l.shapes).list;
       return true;
     });
   };
@@ -542,64 +596,109 @@ function removeUnusedAssets(anim, stats) {
     if (l.refId != null && !used.has(l.refId)) { used.add(l.refId); const a = byId.get(l.refId); if (a && a.layers) visit(a.layers); }
   });
   visit(anim.layers);
+  // glyphs can be built from precomps; never drop assets when the file has character data
+  if (Array.isArray(anim.chars) && anim.chars.length) return;
   const before = anim.assets.length;
   anim.assets = anim.assets.filter(a => used.has(a.id));
   stats.assets += before - anim.assets.length;
 }
 
+// Image policy:
+// - resolution is relative to the asset's display size, so repeating a pass never shrinks an image again
+// - images that are already JPEG/WebP are left alone unless resized or the user asks to re-compress them
+// - transparent images never become JPEG
+// - a candidate is committed only if it is smaller, keeps the alpha channel, and stays within the colour error limit
+const IMG_MAX_COLOR_ERR = 12;   // mean error per visible pixel, 0–255 scale
 async function recompressImages(anim, o, stats) {
-  if (o.ifmt === 'keep' && o.iscale === 1) return;
   for (const a of anim.assets || []) {
     if (typeof a.p !== 'string' || !a.p.startsWith('data:image') || a.p.startsWith('data:image/svg')) continue;
-    try {
-      const img = await loadImg(a.p);
-      const w = Math.max(1, Math.round(img.naturalWidth * o.iscale)), h = Math.max(1, Math.round(img.naturalHeight * o.iscale));
-      const c = document.createElement('canvas'); c.width = w; c.height = h;
-      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0, w, h);
-      let fmt = o.ifmt;
-      if (fmt === 'keep') fmt = a.p.startsWith('data:image/jpeg') ? 'jpeg' : a.p.startsWith('data:image/webp') ? 'webp' : 'png';
-      if (fmt === 'auto') fmt = hasAlpha(ctx, w, h) ? 'webp' : 'jpeg';
-      if (fmt === 'jpeg' && hasAlpha(ctx, w, h)) { // flatten onto white so transparent pixels don't turn black
-        const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
-        const x2 = c2.getContext('2d'); x2.fillStyle = '#fff'; x2.fillRect(0, 0, w, h); x2.drawImage(c, 0, 0);
-        c.getContext('2d').drawImage(c2, 0, 0);
-      }
-      const out = encode(c, fmt, o.iq, fmt !== 'jpeg' && hasAlpha(c.getContext('2d'), w, h));
-      if (out.length < a.p.length) {
-        stats.imgBefore += a.p.length; stats.imgAfter += out.length; stats.images++;
-        a.p = out; a.e = 1; if (a.u == null) a.u = '';
-      }
-    } catch { /* leave image as is */ }
+    const srcFmt = ((a.p.match(/^data:image\/([a-z0-9.+-]+)/i) || [])[1] || '').toLowerCase().replace('jpg', 'jpeg');
+    let img;
+    try { img = await loadImg(a.p); } catch { stats.imgFailed++; continue; }
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    const k = Math.min(1, ((a.w || nw) * o.iscale) / nw);
+    const w = Math.max(1, Math.round(nw * k)), h = Math.max(1, Math.round(nh * k));
+    const resize = w < nw;
+    if (o.ifmt === 'keep' && !resize) continue;
+    if ((srcFmt === 'jpeg' || srcFmt === 'webp') && !resize && !o.reencode) { stats.imgSkipped++; continue; }
+
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0, w, h);
+    const alpha = hasAlpha(ctx, w, h);
+    let fmt = o.ifmt === 'keep' ? (srcFmt === 'jpeg' || srcFmt === 'webp' ? srcFmt : 'png') : o.ifmt;
+    if (fmt === 'auto') fmt = alpha ? 'webp' : 'jpeg';
+    if (fmt === 'jpeg' && alpha) { fmt = 'webp'; stats.alphaProtected++; }
+    const out = encode(c, fmt, o.iq, alpha);
+    if (alpha && out.startsWith('data:image/jpeg')) { stats.imgRejected++; continue; }
+    if (out.length >= a.p.length) { stats.imgNotSmaller++; continue; }
+    let err;
+    try { err = await imageError(ctx, w, h, out); } catch { stats.imgRejected++; continue; }
+    if (err.alphaMax > 2 || err.colorMean > IMG_MAX_COLOR_ERR) { stats.imgRejected++; continue; }
+    stats.imgBefore += a.p.length; stats.imgAfter += out.length; stats.images++;
+    stats.imgWorstColor = Math.max(stats.imgWorstColor, err.colorMean);
+    a.p = out; a.e = 1; if (a.u == null) a.u = '';
   }
 }
 
+/* Property-aware rounding. Every number gets a kind from where it sits in the file:
+   time  – frame rate, in/out points, start times, keyframe times, time remap, markers: never rounded
+   ease  – keyframe easing handles: at least 3 decimals
+   color – fill/stroke/gradient/text colours: at least 3 decimals (1/1000 is finer than one 8-bit step)
+   geom  – transforms, paths, masks, shape sizes, text: the chosen precision
+   safe  – everything else (effects, unknown data): at least 3 decimals */
+const TIME_KEYS = new Set(['fr', 'ip', 'op', 'st', 'sr', 'tm', 'dr', 't']);
+const COLOR_TY = new Set(['fl', 'st', 'gf', 'gs']);
+const META_KEYS = new Set(['mn', 'cix']);   // lottie-web reads these only from expression code
+const NAME_KEYS = new Set(['nm', 'ln', 'cl']);   // keypaths, layer lookup, SVG id/class
+function childKind(key, val, parent, kind) {
+  if (TIME_KEYS.has(key) && (typeof val === 'number' || key === 'tm')) return 'time';
+  if ((key === 'i' || key === 'o') && 't' in parent && typeof parent.t === 'number' && val && !Array.isArray(val)) return 'ease';
+  if ((key === 'c' || key === 'g') && COLOR_TY.has(parent.ty)) return 'color';
+  if (key === 'fc' || key === 'sc') return 'color';
+  if (kind === 'effect' && key === 'v' && parent.ty === 2) return 'color';
+  if (key === 'ef') return 'effect';
+  if (key === 'ks' || key === 'shapes' || key === 'masksProperties' || (key === 't' && val && typeof val === 'object')) return kind === 'effect' ? kind : 'geom';
+  if (key === 'layers' || key === 'assets') return 'safe';
+  return kind;
+}
 function cleanTree(node, o, hasExpr, stats) {
-  const f = Math.pow(10, o.prec);
-  const strip = o.names && !hasExpr;
-  const dropKeys = strip ? new Set(['nm', 'mn', 'ix', 'cix', 'cl', 'ln']) : new Set();
-  const rec = v => {
-    if (typeof v === 'number') { const r = Math.round(v * f) / f; if (r !== v) stats.rounded++; return Object.is(r, -0) ? 0 : r; }
-    if (Array.isArray(v)) return v.map(rec);
+  const geomF = Math.pow(10, o.prec), safeF = Math.pow(10, Math.max(o.prec, 3));
+  const dropMeta = o.meta && !hasExpr, dropNames = o.names && !hasExpr;
+  const round = (v, kind) => {
+    if (kind === 'time' || Number.isInteger(v)) return v;
+    const f = kind === 'geom' ? geomF : safeF;
+    const r = Math.round(v * f) / f;
+    if (r !== v) stats.rounded++;
+    return Object.is(r, -0) ? 0 : r;
+  };
+  const rec = (v, kind) => {
+    if (typeof v === 'number') return round(v, kind);
+    if (Array.isArray(v)) return v.map(x => rec(x, kind));
     if (v && typeof v === 'object') {
-      const out = {};
+      const out = {}, isMask = 'pt' in v && 'mode' in v;
       for (const k in v) {
-        if (dropKeys.has(k) && typeof v[k] !== 'object') { stats.keys++; continue; }
-        if (k === 'p' && typeof v[k] === 'string') { out[k] = v[k]; continue; }
-        out[k] = rec(v[k]);
+        const val = v[k];
+        if (typeof val !== 'object') {
+          if (dropMeta && META_KEYS.has(k)) { stats.metaKeys++; continue; }
+          if (dropNames && NAME_KEYS.has(k) && !(k === 'cl' && isMask)) { stats.nameKeys++; continue; }  // mask "cl" means closed, not a class
+        }
+        if (k === 'p' && typeof val === 'string') { out[k] = val; continue; }
+        out[k] = rec(val, childKind(k, val, v, kind));
       }
       return out;
     }
     return v;
   };
-  return rec(node);
+  return rec(node, 'safe');
 }
 
 async function optimizeLottie(src, o) {
-  const stats = { hidden: 0, assets: 0, images: 0, imgBefore: 0, imgAfter: 0, rounded: 0, keys: 0, meta: false };
+  const stats = { hidden: 0, hiddenShapes: 0, hiddenKept: 0, hiddenSkipped: '', assets: 0, images: 0, imgBefore: 0, imgAfter: 0,
+    imgSkipped: 0, imgRejected: 0, imgNotSmaller: 0, imgFailed: 0, alphaProtected: 0, imgWorstColor: 0, rounded: 0, metaKeys: 0, nameKeys: 0, meta: false };
   let a = clone(src);
   const hasExpr = detectExpressions(a);
-  if (o.names && !hasExpr && a.meta) { delete a.meta; stats.meta = true; }
-  if (o.hidden) removeHidden(a, stats);
+  if (o.meta && a.meta) { delete a.meta; stats.meta = true; }   // export info block: never read by players
+  if (o.hidden) removeHidden(a, stats, hasExpr);
   if (o.unused) removeUnusedAssets(a, stats);
   await recompressImages(a, o, stats);
   a = cleanTree(a, o, hasExpr, stats);
@@ -677,16 +776,21 @@ function makeSample() {
 
 /* ================= OPTIMIZE TAB ================= */
 let optSource = null, optName = 'sample-bounce.json', optResult = null, optRun = 0, optTimer = null;
+let optInput = null;   // { name, format: 'JSON' | 'dotLottie', bytes, text } — what the user actually gave us
 const optOpts = () => ({
-  prec: +$('#opt-prec').value, names: $('#opt-names').checked, hidden: $('#opt-hidden').checked, unused: $('#opt-unused').checked,
-  ifmt: $('#opt-ifmt').value, iq: +$('#opt-iq').value / 100, iscale: +$('#opt-iscale').value
+  prec: +$('#opt-prec').value, meta: $('#opt-meta').checked, names: $('#opt-names').checked, hidden: $('#opt-hidden').checked, unused: $('#opt-unused').checked,
+  ifmt: $('#opt-ifmt').value, iq: +$('#opt-iq').value / 100, iscale: +$('#opt-iscale').value, reencode: $('#opt-reencode').checked
 });
+const imageBytes = s => { let n = 0; const re = /"p":"(data:image[^"]*)"/g; let m; while ((m = re.exec(s))) n += m[1].length; return n; };
 
-function loadOptSource(anim, name, srcText) {
+function loadOptSource(anim, name, input) {
   if (!anim || typeof anim !== 'object' || !Array.isArray(anim.layers)) throw new Error('This file does not look like a Lottie animation (no "layers" found).');
   optSource = anim; optName = name;
-  optSource.__size = srcText != null ? byteLen(srcText) : byteLen(JSON.stringify(anim, null, 2));
-  $('#o-before').textContent = fmtBytes(optSource.__size);
+  const minified = JSON.stringify(anim);
+  optInput = Object.assign({ name, format: 'JSON', text: minified, bytes: byteLen(minified) }, input || {});
+  optInput.minified = minified;
+  $('#o-before-label').textContent = optInput.format === 'dotLottie' ? 'Original · .lottie' : 'Original · JSON';
+  $('#o-before').textContent = fmtBytes(optInput.bytes);
   $('#o-meta1').textContent = metaText(anim);
   play('o-play1', anim);
   runOptimize();
@@ -697,37 +801,58 @@ async function runOptimize() {
   const run = ++optRun;
   setStatus($('#o-status'), 'Optimizing…');
   $('#o-dl').disabled = true;
-  const src = { ...optSource }; delete src.__size;
   try {
-    const r = await optimizeLottie(src, optOpts());
+    const r = await optimizeLottie(optSource, optOpts());
     if (run !== optRun) return;
     optResult = r;
-    const after = byteLen(r.text), before = optSource.__size;
-    $('#o-after').textContent = fmtBytes(after);
+    const after = byteLen(r.text);
+    // like for like: a JSON file is compared with JSON output; a .lottie (zip) is compared through its JSON
+    const isZip = optInput.format === 'dotLottie';
+    const before = isZip ? byteLen(optInput.minified) : optInput.bytes;
     const pct = before ? (1 - after / before) * 100 : 0;
+    $('#o-after').textContent = fmtBytes(after);
+    $('#o-saved-label').textContent = isZip ? 'Saved vs its JSON' : 'Saved';
     $('#o-saved').textContent = (pct >= 0 ? '' : '+') + Math.abs(pct).toFixed(1) + '%';
     $('#o-pill').textContent = pct > 0 ? '−' + Math.round(pct) + '%' : '';
-    $('#o-gzip').textContent = '…';
-    gzipSize(r.text).then(g => { if (run === optRun) $('#o-gzip').textContent = g ? fmtBytes(g) : 'n/a'; });
+    $('#o-gzip').textContent = '…'; $('#o-gzip-label').textContent = 'Gzipped';
+    Promise.all([gzipSize(isZip ? optInput.minified : optInput.text), gzipSize(r.text)]).then(([g0, g1]) => {
+      if (run !== optRun) return;
+      $('#o-gzip').textContent = g1 ? fmtBytes(g1) : 'n/a';
+      if (g0) $('#o-gzip-label').textContent = 'Gzipped · was ' + fmtBytes(g0);
+      renderLog(r, { before, after, g0, g1, isZip });
+    });
     $('#o-meta2').textContent = metaText(r.anim);
     play('o-play2', r.anim);
-    renderLog(r);
+    renderLog(r, { before, after, isZip });
     $('#o-dl').disabled = false;
-    setStatus($('#o-status'), r.hasExpr && optOpts().names ? 'Names kept: this file uses expressions.' : 'Ready. Compare both previews before downloading.', r.hasExpr && optOpts().names ? 'warn' : 'ok');
+    const o = optOpts();
+    if (r.hasExpr && (o.meta || o.names || o.hidden)) setStatus($('#o-status'), 'This file uses expressions, so names, metadata and hidden layers were kept.', 'warn');
+    else setStatus($('#o-status'), 'Ready. Compare both previews before downloading.', 'ok');
   } catch (e) {
     if (run === optRun) setStatus($('#o-status'), 'Could not optimize: ' + e.message, 'warn');
   }
 }
 
-function renderLog(r) {
+function renderLog(r, z) {
   const s = r.stats, items = [];
-  items.push(['Numbers rounded', s.rounded.toLocaleString()]);
-  if (s.keys) items.push(['Names / metadata keys removed', s.keys.toLocaleString()]);
-  if (s.meta) items.push(['Export info block removed', 'meta']);
-  if (s.hidden) items.push(['Hidden layers & shapes removed', s.hidden]);
+  const inMin = optInput.minified, imgIn = imageBytes(inMin), imgOut = imageBytes(r.text);
+  items.push(['Input', `${optInput.format === 'dotLottie' ? '.lottie (zip)' : 'JSON'} · ${fmtBytes(optInput.bytes)}`]);
+  if (z.isZip) items.push(['Compared as', 'JSON (the .lottie export is not available yet)']);
+  items.push(['Minified JSON', fmtBytes(byteLen(inMin)) + ' → ' + fmtBytes(z.after)]);
+  if (z.g0 && z.g1) items.push(['Gzipped JSON', fmtBytes(z.g0) + ' → ' + fmtBytes(z.g1)]);
+  items.push(['Animation data (without images)', fmtBytes(byteLen(inMin) - imgIn) + ' → ' + fmtBytes(z.after - imgOut)]);
+  if (imgIn) items.push(['Embedded images', fmtBytes(imgIn) + ' → ' + fmtBytes(imgOut)]);
+  items.push(['Numbers rounded (timing never rounded)', s.rounded.toLocaleString()]);
+  if (s.metaKeys || s.meta) items.push(['Editor metadata removed', s.metaKeys.toLocaleString() + (s.meta ? ' + export info' : '')]);
+  if (s.nameKeys) items.push(['Layer names removed', s.nameKeys.toLocaleString()]);
+  if (s.hidden || s.hiddenShapes) items.push(['Hidden layers / shapes removed', s.hidden + ' / ' + s.hiddenShapes]);
+  if (s.hiddenKept) items.push(['Hidden layers kept (used by other layers)', s.hiddenKept]);
+  if (s.hiddenSkipped) items.push(['Hidden layers', 'kept: file uses expressions']);
   if (s.assets) items.push(['Unused assets removed', s.assets]);
-  if (s.images) items.push([`Images recompressed (${s.images})`, fmtBytes(s.imgBefore) + ' → ' + fmtBytes(s.imgAfter)]);
-  items.push(['Whitespace', 'minified']);
+  if (s.images) items.push([`Images re-encoded (${s.images})`, fmtBytes(s.imgBefore) + ' → ' + fmtBytes(s.imgAfter)]);
+  if (s.imgSkipped) items.push(['Images already compressed, left as is', s.imgSkipped]);
+  if (s.alphaProtected) items.push(['Transparent images kept out of JPEG', s.alphaProtected]);
+  if (s.imgRejected) items.push(['Image results rejected (quality check)', s.imgRejected]);
   $('#o-log').innerHTML = '';
   for (const [k, v] of items) {
     const li = document.createElement('li'); const a = document.createElement('span'); a.textContent = k;
@@ -739,9 +864,16 @@ function renderLog(r) {
 function paintRange(el) { el.style.setProperty('--p', ((el.value - el.min) / (el.max - el.min) * 100) + '%'); }
 document.querySelectorAll('input[type="range"]').forEach(el => { paintRange(el); el.addEventListener('input', () => paintRange(el)); });
 
+function precHint() {
+  const p = +$('#opt-prec').value, h = $('#opt-prec-hint');
+  h.textContent = p >= 3 ? 'Applies to shapes and positions. Timing is never rounded; colours and easing keep at least 3 decimals.'
+    : 'Lossy: shapes can shift visibly, most of all inside scaled-up precomps. Compare the previews.';
+  h.classList.toggle('warnline', p < 3);
+}
 function scheduleOptimize() { clearTimeout(optTimer); optTimer = setTimeout(runOptimize, 250); }
-['#opt-prec', '#opt-iq'].forEach(id => $(id).addEventListener('input', () => { $(id + '-out').textContent = $(id).value; scheduleOptimize(); }));
-['#opt-names', '#opt-hidden', '#opt-unused', '#opt-ifmt', '#opt-iscale'].forEach(id => $(id).addEventListener('change', scheduleOptimize));
+['#opt-prec', '#opt-iq'].forEach(id => $(id).addEventListener('input', () => { $(id + '-out').textContent = $(id).value; if (id === '#opt-prec') precHint(); scheduleOptimize(); }));
+['#opt-meta', '#opt-names', '#opt-hidden', '#opt-unused', '#opt-ifmt', '#opt-iscale', '#opt-reencode'].forEach(id => $(id).addEventListener('change', scheduleOptimize));
+precHint();
 
 async function handleLottieFile(file) {
   if (!file) return;
@@ -749,11 +881,10 @@ async function handleLottieFile(file) {
   try {
     if (/\.lottie$/i.test(file.name)) {
       const anim = await readDotLottie(file);
-      loadOptSource(anim, file.name.replace(/\.lottie$/i, '.json'), null);
-      optSource.__size = file.size; $('#o-before').textContent = fmtBytes(file.size);
+      loadOptSource(anim, file.name.replace(/\.lottie$/i, '.json'), { format: 'dotLottie', bytes: file.size });
     } else {
       const text = await file.text();
-      loadOptSource(JSON.parse(text), file.name, text);
+      loadOptSource(JSON.parse(text), file.name, { format: 'JSON', bytes: file.size, text });
     }
     $('#opt-name').textContent = 'Loaded: ' + file.name;
   } catch (e) {
@@ -1106,7 +1237,7 @@ $('#v-send').addEventListener('click', () => {
   if (!vidResult) return;
   selectTab('opt');
   $('#opt-name').textContent = 'Loaded: ' + vidResult.anim.nm + '.json (from video)';
-  loadOptSource(clone(vidResult.anim), vidResult.anim.nm + '.json', vidResult.text);
+  loadOptSource(clone(vidResult.anim), vidResult.anim.nm + '.json', { format: 'JSON', bytes: byteLen(vidResult.text), text: vidResult.text });
 });
 
 /* ---------- shared UI ---------- */
