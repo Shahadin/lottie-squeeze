@@ -914,12 +914,16 @@ async function runOptimize() {
     const r = await optimizeLottie(optSource, optOpts());
     if (run !== optRun) return;
     optResult = r;
-    // like for like: JSON input is compared with JSON output, .lottie input with .lottie output
-    const isZip = optInput.format === 'dotLottie';
-    const z = { isZip, jsonBefore: byteLen(optInput.minified), jsonAfter: byteLen(r.text) };
+    // like for like: JSON input is compared with JSON output, .lottie input with .lottie output.
+    // A .lottie holding more than one animation (or themes, state machines…) can't be rebuilt yet, so it is
+    // compared through the JSON of the animation that was optimized.
+    const partial = optInput.format === 'dotLottie' && !!optInput.extra;
+    const isZip = optInput.format === 'dotLottie' && !partial;
+    const z = { isZip, partial, jsonBefore: byteLen(optInput.minified), jsonAfter: byteLen(r.text) };
     $('#o-after-label').textContent = isZip ? 'Optimized · .lottie' : 'Optimized · JSON';
+    $('#o-saved-label').textContent = partial ? 'Saved vs its JSON' : 'Saved';
     if (isZip) { $('#o-after').textContent = '…'; $('#o-saved').textContent = '…'; $('#o-pill').textContent = ''; }
-    else showSaved(optInput.bytes, z.jsonAfter);
+    else showSaved(partial ? z.jsonBefore : optInput.bytes, z.jsonAfter);
     $('#o-gzip').textContent = '…'; $('#o-gzip-label').textContent = 'Gzipped JSON';
     $('#o-meta2').textContent = metaText(r.anim);
     play('o-play2', r.anim);
@@ -928,8 +932,11 @@ async function runOptimize() {
     const o = optOpts();
     if (r.hasExpr && (o.meta || o.names || o.hidden || o.kf || o.dedupe)) setStatus($('#o-status'), 'This file uses expressions, so names, metadata, hidden layers, keyframes and duplicate assets were kept.', 'warn');
     else setStatus($('#o-status'), 'Ready. Compare both previews before downloading.', 'ok');
+    if (partial) setStatus($('#o-status'), /animations/.test(optInput.extra)
+      ? `This .lottie contains ${optInput.extra}. Only the first animation was optimized, so the .lottie download is off to avoid losing the rest. The .json download has that one animation.`
+      : `This .lottie also contains ${optInput.extra}, which can't be carried over yet, so the .lottie download is off. The .json download has the optimized animation.`, 'warn');
 
-    const [g0, g1, pkg] = await Promise.all([gzipSize(isZip ? optInput.minified : optInput.text), gzipSize(r.text), buildDotLottie(r.anim).catch(() => null)]);
+    const [g0, g1, pkg] = await Promise.all([gzipSize(optInput.format === 'dotLottie' ? optInput.minified : optInput.text), gzipSize(r.text), partial ? null : buildDotLottie(r.anim).catch(() => null)]);
     if (run !== optRun) return;
     Object.assign(z, { g0, g1, lottieAfter: pkg ? pkg.size : null });
     r.dotLottie = pkg;
@@ -952,7 +959,8 @@ function showSaved(before, after) {
 function renderLog(r, z) {
   const s = r.stats, items = [];
   const inMin = optInput.minified, imgIn = imageBytes(inMin), imgOut = imageBytes(r.text);
-  items.push(['Input', `${z.isZip ? '.lottie (zip)' : 'JSON'} · ${fmtBytes(optInput.bytes)}`]);
+  items.push(['Input', `${optInput.format === 'dotLottie' ? '.lottie (zip)' : 'JSON'} · ${fmtBytes(optInput.bytes)}`]);
+  if (z.partial) items.push(['Optimized from this .lottie', 'first animation only']);
   items.push(['Minified JSON', fmtBytes(z.jsonBefore) + ' → ' + fmtBytes(z.jsonAfter)]);
   if (z.g0 && z.g1) items.push(['Gzipped JSON', fmtBytes(z.g0) + ' → ' + fmtBytes(z.g1)]);
   items.push(['Animation data (without images)', fmtBytes(z.jsonBefore - imgIn) + ' → ' + fmtBytes(z.jsonAfter - imgOut)]);
@@ -994,16 +1002,31 @@ function scheduleOptimize() { clearTimeout(optTimer); optTimer = setTimeout(runO
 ['#opt-meta', '#opt-names', '#opt-hidden', '#opt-unused', '#opt-kf', '#opt-dedupe', '#opt-ifmt', '#opt-iscale', '#opt-reencode'].forEach(id => $(id).addEventListener('change', scheduleOptimize));
 precHint();
 
+// What a .lottie holds besides one animation and its images. Only the first animation is read, so if there is
+// more, rebuilding the package would silently drop it: the .lottie download is switched off for such files.
+async function dotLottieExtras(file) {
+  const zip = await JSZip.loadAsync(file);
+  const files = Object.keys(zip.files).filter(p => !zip.files[p].dir);
+  const anims = files.filter(p => /^(a|animations)\/.+\.json$/.test(p));
+  const other = files.filter(p => p !== 'manifest.json' && !anims.includes(p) && !/^(i|images)\//.test(p));
+  const parts = [];
+  if (anims.length > 1) parts.push(anims.length + ' animations');
+  if (other.length) parts.push(other.length + (other.length > 1 ? ' extra files' : ' extra file') + ' (such as themes, state machines or audio)');
+  return parts.join(' and ');
+}
+
 async function handleLottieFile(file) {
   if (!file) return;
   $('#opt-name').textContent = 'Reading ' + file.name + '…';
   try {
-    if (/\.lottie$/i.test(file.name)) {
+    const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+    if (/\.lottie$/i.test(file.name) && head[0] === 0x50 && head[1] === 0x4b) {   // "PK": a real zip package
+      const extra = await dotLottieExtras(file);
       const anim = await readDotLottie(file);
-      loadOptSource(anim, file.name.replace(/\.lottie$/i, '.json'), { format: 'dotLottie', bytes: file.size });
-    } else {
+      loadOptSource(anim, file.name.replace(/\.lottie$/i, '.json'), { format: 'dotLottie', bytes: file.size, extra });
+    } else {   // .json, or plain Lottie JSON saved with a .lottie name (some tools do this)
       const text = await file.text();
-      loadOptSource(JSON.parse(text), file.name, { format: 'JSON', bytes: file.size, text });
+      loadOptSource(JSON.parse(text), file.name.replace(/\.lottie$/i, '.json'), { format: 'JSON', bytes: file.size, text });
     }
     $('#opt-name').textContent = 'Loaded: ' + file.name;
   } catch (e) {
