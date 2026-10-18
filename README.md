@@ -26,9 +26,13 @@ Serve the folder locally (for example `python -m http.server 8765`), then open:
 - `http://localhost:8765/audit/harness.html`: current engine
 - `http://localhost:8765/audit/harness.html?app=baseline`: pre-upgrade engine
 
-In the browser console run `runRegressions()` (8 regression tests) or `runBench()` (benchmark: sizes, gzip, canvas and SVG pixel diffs, alpha diffs, structural checks). Fixtures are generated from a fixed seed, so results are reproducible.
+- `http://localhost:8765/audit/harness.html?app=phase1`: Phase 1 engine
+
+In the browser console run `runRegressions()` (R1–R8), `runPhase2()` (R9–R12: keyframes, duplicate assets, .lottie export incl. the official dotLottie player) or `runBench()` (sizes, gzip, .lottie size and round trip, canvas and SVG pixel diffs, alpha diffs, structural checks, per-feature isolation). Fixtures are generated from a fixed seed, so results are reproducible.
 
 ## Status
+
+Phase 2 adds exact keyframe optimization, duplicate-asset merging and `.lottie` (dotLottie v1) export. Each is pixel-identical on its own in the tests, and exported files reopen to identical data and load in the official LottieFiles player.
 
 Phase 1 of the engine upgrade is done (expression-safe hidden-layer removal, full alpha detection, property-aware rounding, separate name/metadata settings, no repeated lossy image compression, honest size statistics). Verified on synthetic fixtures with lottie-web 5.12.2 in Chromium only. Real After Effects / LottieFiles exports and Android/iOS players are not yet tested.
 
