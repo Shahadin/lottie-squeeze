@@ -33,6 +33,12 @@ function collect(layer, skipHidden) {
 const maxPairDiff = (a, b) => { if (a.length !== b.length) return Infinity; let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
 
 /* ---------- structural validation ---------- */
+function sameAssetContent(anim, a, b) {
+  const A = (anim.assets || []).find(x => x.id === a), B = (anim.assets || []).find(x => x.id === b);
+  if (!A || !B) return false;
+  const strip = x => { const { id, nm, ...rest } = x; return JSON.stringify(rest); };
+  return strip(A) === strip(B);
+}
 function structCheck(orig, out, o) {
   const problems = [], info = { maxEaseDiff: 0, maxColourDiff: 0, layersRemoved: 0 };
   for (const k of ['fr', 'ip', 'op', 'w', 'h']) if (orig[k] !== out[k]) problems.push(`root ${k}: ${orig[k]} → ${out[k]}`);
@@ -50,7 +56,11 @@ function structCheck(orig, out, o) {
       if (l.refId != null && !assetIds.has(l.refId)) problems.push(`${c.id}/${l.ind}: asset ${l.refId} missing`);
       const sl = s.layers.find(x => x.ind === l.ind); if (!sl) { problems.push(`${c.id}: unknown layer ${l.ind}`); return; }
       if (l.tt && l.tp == null) { const si = s.layers.indexOf(sl); if (!(i > 0 && si > 0 && c.layers[i - 1].ind === s.layers[si - 1].ind)) problems.push(`${c.id}/${l.ind}: legacy matte source changed`); }
-      for (const k of ['ip', 'op', 'st', 'sr', 'parent', 'tt', 'td', 'tp', 'ty', 'refId', 'hd']) if (sl[k] !== l[k]) problems.push(`${c.id}/${l.ind}: ${k} ${sl[k]} → ${l[k]}`);
+      for (const k of ['ip', 'op', 'st', 'sr', 'parent', 'tt', 'td', 'tp', 'ty', 'refId', 'hd']) if (sl[k] !== l[k]) {
+        // a duplicate-asset merge repoints refId; that is fine when both assets had identical content
+        if (k === 'refId' && sameAssetContent(orig, sl.refId, l.refId)) continue;
+        problems.push(`${c.id}/${l.ind}: ${k} ${sl[k]} → ${l[k]}`);
+      }
       const A = collect(sl, true), B = collect(l, true);   // compare visible content on both sides
       // keyframe optimization legitimately changes keyframe lists; it is verified by pixel isolation instead
       if (!o.kf && JSON.stringify(A.times) !== JSON.stringify(B.times)) problems.push(`${c.id}/${l.ind}: keyframe times changed`);
@@ -281,7 +291,7 @@ window.runRegressions = async function () {
 
   // Structural changes are judged in isolation: default output vs the same rounding with every structural option off.
   // (Rounding effects are measured separately in the benchmark.)
-  const isolated = async (f) => { const full = await W.optimizeLottie(f, D); const ref = await W.optimizeLottie(f, { ...D, hidden: false, meta: false, unused: false, names: false });
+  const isolated = async (f, o = D) => { const full = await W.optimizeLottie(f, o); const ref = await W.optimizeLottie(f, { ...o, hidden: false, hiddenShapes: false, meta: false, unused: false, names: false });
     return { full, v: await canvasDiff(ref.anim, full.anim), vsOriginal: (await canvasDiff(f, full.anim)).worst.pctPx }; };
 
   // R1 expression reads a hidden controller layer
@@ -291,7 +301,7 @@ window.runRegressions = async function () {
       { controllerKept: kept, structuralWorstPctPx: v.worst.pctPx, structuralAlphaMax: v.alphaMax, vsOriginalIncludingRoundingPctPx: vsOriginal }); }
 
   // R2 hidden-layer dependencies without expressions
-  { const f = fxDependencies(); const { full: r, v, vsOriginal } = await isolated(f); const inds = r.anim.layers.map(l => l.ind); const lc = r.anim.assets.find(a => a.id === 'comp_lc');
+  { const f = fxDependencies(); const { full: r, v, vsOriginal } = await isolated(f, { ...D, hiddenShapes: true }); const inds = r.anim.layers.map(l => l.ind); const lc = r.anim.assets.find(a => a.id === 'comp_lc');
     const s = structCheck(f, r.anim, D);
     const cardGroup = r.anim.layers.find(l => l.ind === 1).shapes[0];
     const expect = { parentKept: inds.includes(10), tpMatteKept: inds.includes(11), legacyMatteKept: inds.includes(12), guideRemoved: !inds.includes(16), layerControlTargetKept: lc && lc.layers.some(l => l.ind === 1),
