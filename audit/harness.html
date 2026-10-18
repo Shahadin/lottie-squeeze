@@ -8,7 +8,7 @@
 <script>
 /* The harness drives the REAL app: optimizeLottie, readDotLottie etc. are called inside the iframe.
    ?app=baseline loads the protected pre-upgrade copy so before/after use identical fixtures. */
-const APP_FILES = { baseline: '../baseline/lottie-squeeze-standalone.baseline.html', phase1: '../baseline/lottie-squeeze-standalone.phase1.html', current: '../lottie-squeeze-standalone.html' };
+const APP_FILES = { baseline: '../baseline/lottie-squeeze-standalone.baseline.html', phase1: '../baseline/lottie-squeeze-standalone.phase1.html', phase34: '../baseline/lottie-squeeze-standalone.phase34.html', current: '../lottie-squeeze-standalone.html' };
 const APP_VERSION = APP_FILES[new URLSearchParams(location.search).get('app')] ? new URLSearchParams(location.search).get('app') : 'current';
 const app = () => document.getElementById('app').contentWindow;
 const appReady = new Promise(r => document.getElementById('app').addEventListener('load', () => setTimeout(r, 800)));

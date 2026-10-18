@@ -30,12 +30,16 @@ window.runPhase34 = async function (opts = {}) {
       const rl = await W.optimizeLottie(f, L), rb = await W.optimizeLottie(f, B), rm = await W.optimizeLottie(f, M);
       // identical data renders identically by definition (avoids renderer noise on expression-driven files)
       const same = rl.text === JSON.stringify(f);
-      const v = same ? { worst: { pctPx: 0 }, alphaMax: 0 } : self === 0 ? await canvasDiffSampled(f, rl.anim, 24) : null;
+      let v = same ? { worst: { pctPx: 0 }, alphaMax: 0 } : self === 0 ? await canvasDiffSampled(f, rl.anim, 24) : null;
+      // lottie-web occasionally draws an expression-driven file differently mid-batch, even for byte-identical data
+      // (seen on navidad). A difference is therefore measured a second time; both readings are recorded.
+      let firstReading = null;
+      if (v && (v.worst.pctPx || v.alphaMax)) { firstReading = { pctPx: v.worst.pctPx, alphaMax: v.alphaMax }; v = await canvasDiffSampled(f, rl.anim, 24); }
       const sv = same ? { worstPct: 0 } : self === 0 ? await svgDiff(f, rl.anim, Math.max(1, Math.ceil((f.op - f.ip) / 6))) : null;
       const s = structCheck(f, rl.anim, { ...L, kf: true });
       const imagesUntouched = (f.assets || []).filter(a => typeof a.p === 'string' && a.p.startsWith('data:')).every(a => { const b = (rl.anim.assets || []).find(x => x.id === a.id); return !b || b.p === a.p; });
       const namesKept = !s.problems.some(p => /names changed/.test(p));
-      const row = { selfDiff: self, losslessCanvasPct: v ? v.worst.pctPx : 'renderer not deterministic', losslessAlphaMax: v ? v.alphaMax : null, losslessSvgPct: sv ? sv.worstPct : null,
+      const row = { selfDiff: self, losslessCanvasPct: v ? v.worst.pctPx : 'renderer not deterministic', losslessAlphaMax: v ? v.alphaMax : null, firstReading, losslessSvgPct: sv ? sv.worstPct : null,
         struct: s.problems.length, imagesUntouched, namesKept, rounded: rl.stats.rounded,
         bytes: { in: JSON.stringify(f).length, lossless: rl.text.length, balanced: rb.text.length, maximum: rm.text.length },
         psnr: { balanced: rb.stats.images ? +rb.stats.imgWorstPsnr.toFixed(1) : null, maximum: rm.stats.images ? +rm.stats.imgWorstPsnr.toFixed(1) : null } };
