@@ -176,6 +176,23 @@ input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
 .player video { object-fit: contain; background: transparent; }
 .player > div { display: grid; place-items: center; }
 .player canvas.still { max-width: 100%; max-height: 100%; object-fit: contain; }
+.player { max-height: 520px; }   /* the box takes each animation's own shape; very tall ones are letterboxed */
+
+.batch { padding: 12px; display: grid; gap: 10px; }
+.batch-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+.batch-head b { font-weight: 600; }
+.batch-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 300px; overflow-y: auto; }
+.batch-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 2px; border-radius: 10px; }
+.batch-row.active { background: var(--accent-soft); }
+.batch-main { min-width: 0; display: grid; gap: 1px; text-align: left; background: none; border: 0; color: var(--ink); padding: 6px 8px; border-radius: 10px; cursor: pointer; font: inherit; }
+.batch-main:hover { background: var(--sunk); }
+.batch-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-meta { font: 11.5px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-btn { width: 30px; height: 30px; display: grid; place-items: center; border: 0; background: none; color: var(--muted); border-radius: 8px; cursor: pointer; }
+.icon-btn:hover:not(:disabled) { background: var(--sunk); color: var(--ink); }
+.icon-btn:disabled { opacity: .3; cursor: not-allowed; }
+.icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.btn.small { padding: 5px 10px; font-size: 12.5px; }
 
 .note { padding: 14px; display: grid; gap: 10px; border-color: var(--warn); }
 .note p { margin: 0; font-size: 13px; }
@@ -250,10 +267,15 @@ details.log[open] summary::after { content: "−"; }
     <aside class="rail">
       <label class="drop" id="opt-drop" tabindex="0">
         <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span>
-        <span><strong>Upload a Lottie</strong><small>Drop .json or .lottie, or click</small></span>
-        <input type="file" id="opt-file" accept=".json,.lottie,application/json">
+        <span><strong>Upload Lottie files</strong><small>Drop one or more .json or .lottie files, or click</small></span>
+        <input type="file" id="opt-file" accept=".json,.lottie,application/json" multiple>
       </label>
       <div class="file" id="opt-name">Loaded: sample-bounce.json (example)</div>
+      <div class="card batch" id="opt-batch" hidden>
+        <div class="batch-head"><b id="opt-batch-title">Files</b><button class="btn ghost small" id="opt-batch-clear" type="button">Clear list</button></div>
+        <ul class="batch-list" id="opt-batch-list"></ul>
+        <button class="btn primary block" id="opt-batch-dl" type="button" disabled>Download all (.zip)<span class="dl-size" id="opt-batch-dl-size"></span></button>
+      </div>
 
       <div class="card">
         <div class="group">
@@ -340,10 +362,16 @@ details.log[open] summary::after { content: "−"; }
     <aside class="rail">
       <label class="drop" id="v-drop" tabindex="0">
         <span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg></span>
-        <span><strong>Upload a video</strong><small>.mp4, .webm or .mov · transparent videos supported</small></span>
-        <input type="file" id="v-file" accept="video/*,.mp4,.webm,.mov,.m4v">
+        <span><strong>Upload videos</strong><small>One or more .mp4, .webm or .mov · transparent videos supported</small></span>
+        <input type="file" id="v-file" accept="video/*,.mp4,.webm,.mov,.m4v" multiple>
       </label>
       <div class="file" id="v-name">No video loaded</div>
+      <div class="card batch" id="v-batch" hidden>
+        <div class="batch-head"><b id="v-batch-title">Videos</b></div>
+        <ul class="batch-list" id="v-batch-list"></ul>
+        <button class="btn block" id="v-batch-all" type="button">Convert all with these settings</button>
+        <button class="btn primary block" id="v-batch-dl" type="button" disabled>Download all as .lottie (.zip)<span class="dl-size" id="v-batch-dl-size"></span></button>
+      </div>
 
       <div class="card note" id="v-fallback" hidden>
         <p id="v-fallback-text"></p>
@@ -410,6 +438,7 @@ details.log[open] summary::after { content: "−"; }
                 <option value="480" selected>480 px</option>
                 <option value="720">720 px</option>
                 <option value="1080">1080 px</option>
+                <option value="0">Original size</option>
               </select>
             </div>
             <div class="field">
@@ -514,6 +543,7 @@ function play(id, data) {
   if (players[id]) { players[id].destroy(); delete players[id]; }
   const el = document.getElementById(id);
   el.innerHTML = '';
+  if (data && data.w > 0 && data.h > 0 && el.parentElement && el.parentElement.classList.contains('player')) el.parentElement.style.aspectRatio = data.w + ' / ' + data.h;
   if (!window.lottie) { el.innerHTML = '<p class="placeholder">Preview player failed to load.</p>'; return; }
   try {
     players[id] = lottie.loadAnimation({ container: el, renderer: 'svg', loop: true, autoplay: true, animationData: clone(data) });
@@ -1387,7 +1417,12 @@ async function optimizeAny(anim, o, job, text) {
   }
 }
 
+// optBusy pauses the background list while the file on screen is processed
 async function runOptimize() {
+  optBusy = true;
+  try { await runOptimizeOnScreen(); } finally { optBusy = false; pumpBatch(); }
+}
+async function runOptimizeOnScreen() {
   if (!optSource) return;
   const o = optOpts(), key = JSON.stringify(o);
   if (optResult && optResult.key === key && optResult.source === optSource) return;   // nothing changed: nothing to redo
@@ -1455,8 +1490,9 @@ async function runOptimize() {
     renderLog(r, z);
     if (isZip && !pkg) setStatus($('#o-status'), `The .lottie couldn't be rebuilt (${z.repackFailed}), so its download is off. The .json download has the first animation.`, 'warn');
     else if (isZip && !(r.hasExpr && (o.meta || o.names || o.hidden || o.kf || o.dedupe))) setStatus($('#o-status'), z.animations > 1 ? `Ready. All ${z.animations} animations were optimized; the preview shows the first.` : 'Ready. Compare both previews before downloading.', 'ok');
+    batchActiveDone();
   } catch (e) {
-    if (run === optRun) setStatus($('#o-status'), 'Could not optimize: ' + (e instanceof UserError ? e.message : e.message || e), 'warn');
+    if (run === optRun) { setStatus($('#o-status'), 'Could not optimize: ' + (e instanceof UserError ? e.message : e.message || e), 'warn'); batchActiveDone('Could not optimize'); }
   }
 }
 // Strict Lossless run: its own path, never the structural optimizer
@@ -1512,6 +1548,7 @@ async function runStrict(run, o, key) {
   const warnNotes = isZip && z.check && z.check.notes && z.check.notes.length ? ' Note: ' + z.check.notes[0] + (z.check.notes.length > 1 ? ` (+${z.check.notes.length - 1} more)` : '') + '.' : '';
   if (note) setStatus($('#o-status'), note + warnNotes, (isZip ? z.pkgOk : z.jsonOk) ? (warnNotes ? 'warn' : 'ok') : 'warn');
   else setStatus($('#o-status'), (isZip ? 'Ready. Verified: every file in the package is byte-identical to the original.' : 'Ready. Verified: every value is identical to the original; only whitespace was removed.') + warnNotes, warnNotes ? 'warn' : 'ok');
+  batchActiveDone();
 }
 
 function renderStrictLog(z) {
@@ -1588,7 +1625,7 @@ function precHint() {
     : 'Lossy: shapes can shift visibly, most of all inside scaled-up precomps. Compare the previews.';
   h.classList.toggle('warnline', on && p < 3);
 }
-function scheduleOptimize() { clearTimeout(optTimer); optTimer = setTimeout(runOptimize, 250); }
+function scheduleOptimize() { clearTimeout(optTimer); optTimer = setTimeout(() => { renderBatch(); runOptimize(); }, 250); }
 ['#opt-prec', '#opt-iq'].forEach(id => $(id).addEventListener('input', () => { $(id + '-out').textContent = $(id).value; if (id === '#opt-prec') precHint(); markCustom(); scheduleOptimize(); }));
 ['#opt-round', '#opt-defaults', '#opt-meta', '#opt-names', '#opt-hidden', '#opt-hiddenShapes', '#opt-unused', '#opt-kf', '#opt-dedupe', '#opt-ifmt', '#opt-iscale', '#opt-reencode'].forEach(id => $(id).addEventListener('change', () => { if (id === '#opt-round') precHint(); markCustom(); scheduleOptimize(); }));
 applyPreset('balanced');
@@ -1602,21 +1639,22 @@ async function handleLottieFile(file) {
     const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
     if (head[0] === 0x50 && head[1] === 0x4b) {   // "PK": a zip package, whatever its name
       const anim = await readDotLottie(file);
-      loadOptSource(anim, file.name.replace(/\.(lottie|zip)$/i, '.json'), { format: 'dotLottie', bytes: file.size, file });
+      loadOptSource(anim, file.name.replace(/\.(lottie|zip)$/i, '.json'), { format: 'dotLottie', bytes: file.size, file, srcFile: file });
     } else {   // .json, or plain Lottie JSON saved with a .lottie name (some tools do this)
       const text = await file.text();
       let anim;
       try { anim = JSON.parse(text); }
       catch { throw new UserError(/\.lottie$/i.test(file.name) ? "This .lottie can't be opened. It may be damaged, or it isn't a .lottie file." : "This isn't valid JSON. The file may be cut off, or it isn't a Lottie file."); }
-      loadOptSource(anim, file.name.replace(/\.lottie$/i, '.json'), { format: 'JSON', bytes: file.size, text });
+      loadOptSource(anim, file.name.replace(/\.lottie$/i, '.json'), { format: 'JSON', bytes: file.size, text, srcFile: file });
     }
     $('#opt-name').textContent = 'Loaded: ' + file.name;
   } catch (e) {
     $('#opt-name').textContent = 'Could not read ' + file.name;
     setStatus($('#o-status'), e instanceof UserError ? e.message : 'This file could not be read: ' + (e.message || e), 'warn');
+    if (batchActive && batchActive.file === file) { optInput = { srcFile: file }; batchActiveDone(e instanceof UserError ? e.message : 'Could not be read'); }
   }
 }
-wireDrop('#opt-drop', '#opt-file', handleLottieFile);
+wireDrop('#opt-drop', '#opt-file', addLottieFiles);
 $('#o-dl').addEventListener('click', () => {
   if (!optResult) return;
   const base = optName.replace(/\.json$/i, '');
@@ -1642,7 +1680,7 @@ const needAlpha = () => !!(src && src.alpha) || keyOn();
 function updateEstimate() {
   if (!src) return;
   const fps = +$('#v-fps').value;
-  const w = Math.min(+$('#v-width').value, src.w), h = Math.round(src.h * w / src.w);
+  const w = Math.min(+$('#v-width').value || src.w, src.w), h = Math.round(src.h * w / src.w);
   $('#v-estimate').innerHTML = '';
   const t = document.createElement('span');
   if (src.duration) {
@@ -1750,6 +1788,17 @@ function loadVideoFrom(url) {
     vid.src = url; vid.load();
   });
 }
+// Videos recorded in a browser (MediaRecorder, screen recorders) often report Infinity as their length until
+// the end has been read. Seeking far past the end makes the browser work out the real length.
+function resolveDuration() {
+  return new Promise(res => {
+    const done = () => { vid.removeEventListener('durationchange', check); clearTimeout(to); vid.currentTime = 0; res(); };
+    const check = () => { if (isFinite(vid.duration)) done(); };
+    const to = setTimeout(done, 5000);
+    vid.addEventListener('durationchange', check);
+    vid.currentTime = 1e7;
+  });
+}
 function seek(t) {
   return new Promise(res => {
     const done = () => { vid.removeEventListener('seeked', done); clearTimeout(to); res(); };
@@ -1801,6 +1850,12 @@ async function handleVideoFile(file) {
     showFallback('nodecode'); setAlphaBadge();
     return;
   }
+  if (!isFinite(vid.duration)) await resolveDuration();
+  if (!isFinite(vid.duration) || !(vid.duration > 0)) {
+    $('#v-name').textContent = 'Could not read the length of ' + file.name;
+    setStatus($('#v-status'), "This video doesn't say how long it is, so it can't be converted. Re-save it with a video editor or converter.", 'warn');
+    return;
+  }
   await seek(Math.min(0.1, vid.duration / 2));
   src = { kind: 'video', w: vid.videoWidth, h: vid.videoHeight, duration: vid.duration, alpha: detectAlpha(vid, vid.videoWidth, vid.videoHeight) };
   afterSourceReady(file);
@@ -1810,6 +1865,7 @@ async function handleVideoFile(file) {
 
 function afterSourceReady(file) {
   $('#v-name').textContent = 'Loaded: ' + file.name;
+  $('#v-vidbox').style.aspectRatio = src.w + ' / ' + src.h;   // the preview keeps the video's shape
   $('#v-meta1').textContent = `${src.w}×${src.h}` + (src.duration ? ` · ${src.duration.toFixed(1)}s` : '') + (src.alpha ? ' · alpha' : '');
   $('#v-start').value = 0; $('#v-end').value = src.duration ? src.duration.toFixed(1) : 0;
   if (src.duration) $('#v-end').max = src.duration.toFixed(1);
@@ -1818,7 +1874,7 @@ function afterSourceReady(file) {
   $('#v-play').innerHTML = '<p class="placeholder">Each kept frame becomes a compressed image inside the Lottie JSON.</p>';
   if (keyOn()) previewStill();
 }
-wireDrop('#v-drop', '#v-file', handleVideoFile);
+wireDrop('#v-drop', '#v-file', addVideoFiles);
 
 /* ---------- built-in converter (ffmpeg.wasm), loaded on demand ---------- */
 function loadScript(url) {
@@ -1896,7 +1952,7 @@ async function convertVideo() {
   let fmt = $('#v-fmt').value; if (alpha && fmt === 'jpeg') fmt = 'webp';
   const start = Math.max(0, +$('#v-start').value || 0);
   const end = src.duration ? Math.min(src.duration, +$('#v-end').value || src.duration) : (+$('#v-end').value || 0);
-  const scale = Math.min(1, +$('#v-width').value / src.w);
+  const scale = Math.min(1, (+$('#v-width').value || src.w) / src.w);   // the height always follows, so the ratio is kept
   const W = Math.max(2, Math.round(src.w * scale)), H = Math.max(2, Math.round(src.h * scale));
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const cx = cv.getContext('2d', { willReadFrequently: true });
   const TS = 64, sm = document.createElement('canvas'); sm.width = sm.height = TS; const sx = sm.getContext('2d', { willReadFrequently: true });
@@ -1904,6 +1960,7 @@ async function convertVideo() {
   try {
     if (src.kind === 'video') {
       total = Math.max(1, Math.floor((end - start) * fps));
+      if (!isFinite(total)) throw new Error("the video's length is unknown");
       getFrame = async i => { await seek(Math.min(start + i / fps + 0.0001, src.duration - 0.001)); return vid; };
     } else {
       setStatus($('#v-status'), 'Extracting frames with the converter…');
@@ -1936,7 +1993,7 @@ async function convertVideo() {
   } catch (e) {
     $('#v-go').disabled = false; $('#v-cancel').hidden = true; $('#v-bar').style.width = '0';
     setStatus($('#v-status'), e.message === 'cancelled' ? 'Conversion cancelled.' : 'Conversion failed: ' + e.message, 'warn');
-    return;
+    return false;
   }
   const ks = { o: { a: 0, k: 100 }, r: { a: 0, k: 0 }, p: { a: 0, k: [0, 0, 0] }, a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] } };
   const anim = {
@@ -1957,6 +2014,8 @@ async function convertVideo() {
   const note = alpha && $('#v-fmt').value === 'jpeg' ? ' Frames were saved as WebP to keep transparency.' : '';
   setStatus($('#v-status'), (ratio > 1 ? `Done. The Lottie is ${ratio.toFixed(1)}× the video size; lower fps, width or quality to shrink it.` : 'Done. Preview on the right.') + note, ratio > 1 ? 'warn' : 'ok');
   if (src.kind === 'video') vid.play().catch(() => {});
+  await recordVideoResult(anim, text);
+  return true;
 }
 $('#v-go').addEventListener('click', convertVideo);
 $('#v-cancel').addEventListener('click', () => { cancelFlag = true; });
@@ -1968,14 +2027,232 @@ $('#v-send').addEventListener('click', () => {
   loadOptSource(clone(vidResult.anim), vidResult.anim.nm + '.json', { format: 'JSON', bytes: byteLen(vidResult.text), text: vidResult.text });
 });
 
+/* ---------- several files at once ----------
+   One file at a time is shown in the previews and processed by the normal flow (runOptimize / convertVideo).
+   On the Optimize tab every other file in the list is processed in the background with the same settings;
+   results are kept per settings, so changing a setting re-does them. A single upload works exactly as before. */
+const BATCH_MAX = 30;
+let batchSeq = 0;
+const baseName = name => name.replace(/\.(json|lottie|zip|mp4|webm|mov|m4v)$/i, '');
+function uniqueNames(entries, nameOf) {
+  const seen = new Map();
+  return entries.map(e => { let n = nameOf(e); const k = n.toLowerCase(); const c = seen.get(k) || 0; seen.set(k, c + 1); if (c) n = n.replace(/(\.[^.]+(\.[^.]+)?)$/, ` (${c + 1})$1`); return n; });
+}
+async function zipAndSave(files, zipName, statusEl) {
+  const zip = new JSZip();
+  for (const [name, blob] of files) zip.file(name, blob, { compression: /\.lottie$/i.test(name) ? 'STORE' : 'DEFLATE', compressionOptions: { level: 9 } });
+  return saveFile(zipName, await zip.generateAsync({ type: 'blob', mimeType: 'application/zip' }), statusEl);
+}
+// Shared list: one row per file with its state, sizes, a download button and a remove button
+function renderFileList(listEl, entries, active, isCurrent, handlers) {
+  listEl.innerHTML = '';
+  for (const e of entries) {
+    const li = document.createElement('li');
+    li.className = 'batch-row' + (e === active ? ' active' : '');
+    const main = document.createElement('button'); main.type = 'button'; main.className = 'batch-main';
+    main.setAttribute('aria-current', e === active ? 'true' : 'false');
+    const nm = document.createElement('span'); nm.className = 'batch-name'; nm.textContent = e.name;
+    const meta = document.createElement('span'); meta.className = 'batch-meta';
+    const done = e.result && isCurrent(e.result);
+    if (done) {
+      const pct = (1 - e.result.outBytes / e.result.inBytes) * 100;
+      meta.textContent = `${fmtBytes(e.result.inBytes)} → ${fmtBytes(e.result.outBytes)} · ${pct >= 0 ? '−' : '+'}${Math.abs(pct).toFixed(0)}%`;
+    } else if (e.state === 'error' && e.errorKey === handlers.key()) { meta.textContent = e.error; meta.classList.add('warnline'); }
+    else meta.textContent = e.state === 'working' ? handlers.workingText : handlers.waitingText(e);
+    main.append(nm, meta);
+    main.addEventListener('click', () => handlers.select(e));
+    const dl = document.createElement('button'); dl.type = 'button'; dl.className = 'icon-btn'; dl.title = 'Download ' + e.name; dl.setAttribute('aria-label', 'Download ' + e.name);
+    dl.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>'; dl.disabled = !done;
+    dl.addEventListener('click', () => handlers.download(e));
+    const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'icon-btn'; rm.title = 'Remove ' + e.name; rm.setAttribute('aria-label', 'Remove ' + e.name);
+    rm.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    rm.addEventListener('click', () => handlers.remove(e));
+    li.append(main, dl, rm); listEl.append(li);
+  }
+}
+
+/* --- Optimize tab --- */
+let batch = [], batchActive = null, batchBusy = false, optBusy = false;
+const batchKey = () => JSON.stringify(optOpts());
+function renderBatch() {
+  const box = $('#opt-batch'); box.hidden = batch.length < 2;
+  if (box.hidden) return;
+  const key = batchKey(), current = r => r.key === key;
+  renderFileList($('#opt-batch-list'), batch, batchActive, current, {
+    key: batchKey, workingText: 'Optimizing…', waitingText: () => 'Waiting…',
+    select: e => showBatchEntry(e),
+    download: e => saveFile(batchOutName(e), e.result.blob, $('#o-status')),
+    remove: e => removeBatchEntry(e)
+  });
+  const ready = batch.filter(e => e.result && current(e.result));
+  const pending = batch.filter(e => !(e.result && current(e.result)) && !(e.state === 'error' && e.errorKey === key));
+  const total = ready.reduce((n, e) => n + e.result.outBytes, 0), before = ready.reduce((n, e) => n + e.result.inBytes, 0);
+  $('#opt-batch-title').textContent = `${batch.length} files` + (pending.length ? ` · ${batch.length - pending.length} done` : '');
+  $('#opt-batch-dl').disabled = !ready.length || pending.length > 0;
+  $('#opt-batch-dl-size').textContent = ready.length && !pending.length ? `${fmtBytes(total)} (was ${fmtBytes(before)})` : '';
+}
+const batchOutName = e => baseName(e.name) + (e.result.ext === '.json' ? '.min.json' : '.lottie');
+async function addLottieFiles(files) {
+  files = [...files].filter(Boolean);
+  if (!files.length) return;
+  if (files.length === 1 && !batch.length) return handleLottieFile(files[0]);   // one file: unchanged behaviour
+  // the file already on screen (uploaded on its own) joins the list first
+  if (!batch.length && optInput && optInput.srcFile) batch.push({ id: ++batchSeq, file: optInput.srcFile, name: optInput.srcFile.name, state: 'queued' });
+  const room = BATCH_MAX - batch.length;
+  for (const f of files.slice(0, Math.max(0, room))) batch.push({ id: ++batchSeq, file: f, name: f.name, state: 'queued' });
+  if (files.length > room) setStatus($('#o-status'), `The list holds up to ${BATCH_MAX} files, so ${files.length - Math.max(0, room)} were not added.`, 'warn');
+  const first = batchActive && batch.includes(batchActive) ? null : batch[0];
+  if (first) await showBatchEntry(first); else { renderBatch(); pumpBatch(); }
+}
+async function showBatchEntry(e) {
+  batchActive = e; renderBatch();
+  $('#opt-name').textContent = 'Reading ' + e.name + '…';
+  await handleLottieFile(e.file);
+}
+function removeBatchEntry(e) {
+  batch = batch.filter(x => x !== e);
+  if (batch.length < 2) { const last = batch[0]; batch = []; batchActive = null; renderBatch(); if (last && optInput && optInput.srcFile !== last.file) handleLottieFile(last.file); return; }
+  if (batchActive === e) showBatchEntry(batch[0]); else renderBatch();
+}
+// called when the file on screen has finished (or failed)
+function batchActiveDone(err) {
+  const e = batchActive;
+  if (e && optInput && optInput.srcFile === e.file) {
+    if (err) { e.state = 'error'; e.error = err; e.errorKey = batchKey(); }
+    else {
+      const r = optResult, isZip = optInput.format === 'dotLottie';
+      const blob = isZip ? r.dotLottie : (r.text != null ? new Blob([r.text], { type: 'application/json' }) : null);
+      if (blob) { e.result = { key: r.key, blob, ext: isZip ? '.lottie' : '.json', inBytes: e.file.size, outBytes: blob.size }; e.state = 'done'; }
+      else { e.state = 'error'; e.error = 'No output was produced'; e.errorKey = batchKey(); }
+    }
+  }
+  renderBatch(); pumpBatch();
+}
+// one background file at a time; pauses while the file on screen is being processed
+async function pumpBatch() {
+  if (batchBusy || optBusy || batch.length < 2) return;
+  const key = batchKey(), o = optOpts();
+  const e = batch.find(x => x !== batchActive && !(x.result && x.result.key === key) && !(x.state === 'error' && x.errorKey === key));
+  if (!e) { renderBatch(); return; }
+  batchBusy = true; e.state = 'working'; renderBatch();
+  try { e.result = await processHeadless(e, o, key); e.state = 'done'; }
+  catch (err) {
+    if (err && err.message === 'cancelled') e.state = 'queued';
+    else { e.state = 'error'; e.error = err instanceof UserError ? err.message : 'Could not process: ' + (err && err.message || err); e.errorKey = key; }
+  }
+  batchBusy = false; renderBatch();
+  setTimeout(pumpBatch, 0);
+}
+// the same processing as the on-screen flow, without touching the page
+async function processHeadless(e, o, key) {
+  const f = e.file, job = 'b' + e.id + ':' + Date.now();
+  if (!f.size) throw new UserError('This file is empty.');
+  if (f.size > LIMITS.fileMB * 1048576) throw new UserError(`Over the ${LIMITS.fileMB} MB limit.`);
+  const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
+  const out = (blob, ext) => ({ key, blob, ext, inBytes: f.size, outBytes: blob.size });
+  if (head[0] === 0x50 && head[1] === 0x4b) {
+    if (o.strict) { const r = await strictLosslessDotLottie(f); if (!r.ok) throw new UserError('Strict check failed: ' + r.reason); return out(r.blob, '.lottie'); }
+    let n = 0;
+    const rep = await repackDotLottie(f, o, (a, oo) => optimizeAny(a, oo, job + ':' + (++n)));
+    return out(rep.blob, '.lottie');
+  }
+  const text = await f.text();
+  let anim;
+  try { anim = JSON.parse(text); } catch { throw new UserError("This isn't valid JSON."); }
+  if (!anim || typeof anim !== 'object' || !Array.isArray(anim.layers)) throw new UserError("This isn't a Lottie animation: it has no layers.");
+  if (o.strict) { const r = strictLosslessJson(text); if (!r.ok) throw new UserError(r.reason); return out(new Blob([r.text], { type: 'application/json' }), '.json'); }
+  const r = await optimizeAny(anim, o, job, text);
+  return out(new Blob([r.text], { type: 'application/json' }), '.json');
+}
+$('#opt-batch-dl').addEventListener('click', () => {
+  const key = batchKey(), ready = batch.filter(e => e.result && e.result.key === key);
+  const names = uniqueNames(ready, batchOutName);
+  zipAndSave(ready.map((e, i) => [names[i], e.result.blob]), `lottie-squeeze-${ready.length}-files.zip`, $('#o-status'));
+});
+$('#opt-batch-clear').addEventListener('click', () => { batch = []; batchActive = null; renderBatch(); });
+
+/* --- MP4 tab --- */
+let vbatch = [], vActive = null, vConvertingAll = false;
+const videoKey = () => JSON.stringify(['#v-fps', '#v-width', '#v-q', '#v-fmt', '#v-dedupe', '#v-bg', '#v-key', '#v-tol', '#v-soft'].map(id => $(id).value));
+function renderVBatch() {
+  const box = $('#v-batch'); box.hidden = vbatch.length < 2;
+  if (box.hidden) return;
+  const key = videoKey(), current = r => r.key === key;
+  renderFileList($('#v-batch-list'), vbatch, vActive, current, {
+    key: videoKey, workingText: 'Converting…', waitingText: e => e.state === 'error' ? e.error : 'Not converted yet',
+    select: e => { if (!vConvertingAll) showVideoEntry(e); },
+    download: e => saveFile(baseName(e.name) + '.lottie', e.result.lottie, $('#v-status')),
+    remove: e => { if (vConvertingAll) return; vbatch = vbatch.filter(x => x !== e); if (vbatch.length < 2) { vbatch = []; vActive = null; } else if (vActive === e) showVideoEntry(vbatch[0]); renderVBatch(); }
+  });
+  const ready = vbatch.filter(e => e.result && current(e.result));
+  $('#v-batch-title').textContent = `${vbatch.length} videos · ${ready.length} converted`;
+  $('#v-batch-all').disabled = vConvertingAll || ready.length === vbatch.length;
+  $('#v-batch-dl').disabled = vConvertingAll || !ready.length;
+  $('#v-batch-dl-size').textContent = ready.length ? fmtBytes(ready.reduce((n, e) => n + e.result.outBytes, 0)) : '';
+}
+async function addVideoFiles(files) {
+  files = [...files].filter(Boolean);
+  if (!files.length) return;
+  if (files.length === 1 && !vbatch.length) return handleVideoFile(files[0]);
+  if (!vbatch.length && vidFile && src) vbatch.push({ id: ++batchSeq, file: vidFile, name: vidFile.name, state: 'ready' });
+  const room = BATCH_MAX - vbatch.length;
+  for (const f of files.slice(0, Math.max(0, room))) vbatch.push({ id: ++batchSeq, file: f, name: f.name, state: 'ready' });
+  if (files.length > room) setStatus($('#v-status'), `The list holds up to ${BATCH_MAX} videos, so ${files.length - Math.max(0, room)} were not added.`, 'warn');
+  if (!vActive || !vbatch.includes(vActive)) await showVideoEntry(vbatch[0]); else renderVBatch();
+}
+async function showVideoEntry(e) {
+  vActive = e; renderVBatch();
+  await handleVideoFile(e.file);
+  if (e.result && e.result.key === videoKey()) showVideoResult(e.result.anim, e.result.text);
+}
+// shown after a conversion, or when picking an already converted video from the list
+function showVideoResult(anim, text) {
+  vidResult = { anim, text };
+  $('#v-after').textContent = fmtBytes(byteLen(text));
+  $('#v-frames').textContent = `${anim.assets.length}/${anim.op - anim.ip}`;
+  $('#v-gzip').textContent = '…'; gzipSize(text).then(g => $('#v-gzip').textContent = g ? fmtBytes(g) : 'n/a');
+  $('#v-meta2').textContent = metaText(anim);
+  play('v-play', anim);
+  $('#v-dl').disabled = $('#v-send').disabled = false;
+}
+async function recordVideoResult(anim, text) {
+  const e = vActive;
+  if (!e || e.file !== vidFile) return;
+  const lottie = await buildDotLottie(anim);
+  e.result = { key: videoKey(), anim, text, lottie, inBytes: e.file.size, outBytes: lottie.size }; e.state = 'done';
+  renderVBatch();
+}
+$('#v-batch-all').addEventListener('click', async () => {
+  vConvertingAll = true; renderVBatch();
+  for (const e of vbatch) {
+    if (e.result && e.result.key === videoKey()) continue;
+    await showVideoEntry(e);
+    if (!src) { e.state = 'error'; e.error = "This browser can't play it: select it and use the built-in converter"; e.errorKey = videoKey(); renderVBatch(); continue; }
+    e.state = 'working'; renderVBatch();
+    const ok = await convertVideo();
+    if (cancelFlag) { e.state = 'ready'; break; }
+    if (!ok) { e.state = 'error'; e.error = 'Conversion failed'; e.errorKey = videoKey(); }
+    renderVBatch();
+  }
+  vConvertingAll = false; renderVBatch();
+  const done = vbatch.filter(e => e.result && e.result.key === videoKey()).length;
+  setStatus($('#v-status'), `Converted ${done} of ${vbatch.length} videos with the same settings.`, done === vbatch.length ? 'ok' : 'warn');
+});
+$('#v-batch-dl').addEventListener('click', () => {
+  const key = videoKey(), ready = vbatch.filter(e => e.result && e.result.key === key);
+  const names = uniqueNames(ready, e => baseName(e.name) + '.lottie');
+  zipAndSave(ready.map((e, i) => [names[i], e.result.lottie]), `lottie-squeeze-${ready.length}-videos.zip`, $('#v-status'));
+});
+['#v-fps', '#v-width', '#v-q', '#v-fmt', '#v-dedupe', '#v-bg', '#v-key', '#v-tol', '#v-soft'].forEach(id => $(id).addEventListener('input', renderVBatch));
+
 /* ---------- shared UI ---------- */
 function wireDrop(dropSel, inputSel, handler) {
   const d = $(dropSel), inp = $(inputSel);
-  inp.addEventListener('change', () => { handler(inp.files[0]); inp.value = ''; });
+  inp.addEventListener('change', () => { const files = [...inp.files]; inp.value = ''; handler(files); });
   d.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inp.click(); } });
   ['dragenter', 'dragover'].forEach(t => d.addEventListener(t, e => { e.preventDefault(); d.classList.add('over'); }));
   ['dragleave', 'drop'].forEach(t => d.addEventListener(t, e => { e.preventDefault(); d.classList.remove('over'); }));
-  d.addEventListener('drop', e => handler(e.dataTransfer.files[0]));
+  d.addEventListener('drop', e => handler([...e.dataTransfer.files]));
 }
 function selectTab(which) {
   const isOpt = which === 'opt';
