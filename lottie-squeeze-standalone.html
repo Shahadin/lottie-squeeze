@@ -275,6 +275,7 @@ details.log[open] summary::after { content: "−"; }
         <div class="batch-head"><b id="opt-batch-title">Files</b><button class="btn ghost small" id="opt-batch-clear" type="button">Clear list</button></div>
         <ul class="batch-list" id="opt-batch-list"></ul>
         <button class="btn primary block" id="opt-batch-dl" type="button" disabled>Download all (.zip)<span class="dl-size" id="opt-batch-dl-size"></span></button>
+        <button class="btn ghost block" id="opt-batch-dl-json" type="button" disabled>Download all as JSON (.zip)</button>
       </div>
 
       <div class="card">
@@ -371,6 +372,7 @@ details.log[open] summary::after { content: "−"; }
         <ul class="batch-list" id="v-batch-list"></ul>
         <button class="btn block" id="v-batch-all" type="button">Convert all with these settings</button>
         <button class="btn primary block" id="v-batch-dl" type="button" disabled>Download all as .lottie (.zip)<span class="dl-size" id="v-batch-dl-size"></span></button>
+        <button class="btn ghost block" id="v-batch-dl-json" type="button" disabled>Download all as JSON (.zip)</button>
       </div>
 
       <div class="card note" id="v-fallback" hidden>
@@ -2088,7 +2090,7 @@ function renderBatch() {
   const pending = batch.filter(e => !(e.result && current(e.result)) && !(e.state === 'error' && e.errorKey === key));
   const total = ready.reduce((n, e) => n + e.result.outBytes, 0), before = ready.reduce((n, e) => n + e.result.inBytes, 0);
   $('#opt-batch-title').textContent = `${batch.length} files` + (pending.length ? ` · ${batch.length - pending.length} done` : '');
-  $('#opt-batch-dl').disabled = !ready.length || pending.length > 0;
+  $('#opt-batch-dl').disabled = $('#opt-batch-dl-json').disabled = !ready.length || pending.length > 0;
   $('#opt-batch-dl-size').textContent = ready.length && !pending.length ? `${fmtBytes(total)} (was ${fmtBytes(before)})` : '';
 }
 const batchOutName = e => baseName(e.name) + (e.result.ext === '.json' ? '.min.json' : '.lottie');
@@ -2122,7 +2124,7 @@ function batchActiveDone(err) {
     else {
       const r = optResult, isZip = optInput.format === 'dotLottie';
       const blob = isZip ? r.dotLottie : (r.text != null ? new Blob([r.text], { type: 'application/json' }) : null);
-      if (blob) { e.result = { key: r.key, blob, ext: isZip ? '.lottie' : '.json', inBytes: e.file.size, outBytes: blob.size }; e.state = 'done'; }
+      if (blob) { e.result = { key: r.key, blob, ext: isZip ? '.lottie' : '.json', inBytes: e.file.size, outBytes: blob.size, strict: !!r.strict }; e.state = 'done'; }
       else { e.state = 'error'; e.error = 'No output was produced'; e.errorKey = batchKey(); }
     }
   }
@@ -2149,7 +2151,7 @@ async function processHeadless(e, o, key) {
   if (!f.size) throw new UserError('This file is empty.');
   if (f.size > LIMITS.fileMB * 1048576) throw new UserError(`Over the ${LIMITS.fileMB} MB limit.`);
   const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
-  const out = (blob, ext) => ({ key, blob, ext, inBytes: f.size, outBytes: blob.size });
+  const out = (blob, ext) => ({ key, blob, ext, inBytes: f.size, outBytes: blob.size, strict: !!o.strict });
   if (head[0] === 0x50 && head[1] === 0x4b) {
     if (o.strict) { const r = await strictLosslessDotLottie(f); if (!r.ok) throw new UserError('Strict check failed: ' + r.reason); return out(r.blob, '.lottie'); }
     let n = 0;
@@ -2170,6 +2172,31 @@ $('#opt-batch-dl').addEventListener('click', () => {
   zipAndSave(ready.map((e, i) => [names[i], e.result.blob]), `lottie-squeeze-${ready.length}-files.zip`, $('#o-status'));
 });
 $('#opt-batch-clear').addEventListener('click', () => { batch = []; batchActive = null; renderBatch(); });
+// Every result as plain JSON. A .lottie gives the JSON of each animation inside it, with its images embedded so the
+// file works on its own; in Lossless the animation JSON is kept exactly as it is in the package (as the single .json download).
+async function batchJsonFiles(entries) {
+  const out = [];
+  for (const e of entries) {
+    if (e.result.ext === '.json') { out.push([baseName(e.name) + '.min.json', e.result.blob]); continue; }
+    const zip = await JSZip.loadAsync(e.result.blob);
+    const paths = animationPaths(zip);
+    for (const p of paths) {
+      let text = await zip.file(p).async('string');
+      if (!e.result.strict) { const anim = JSON.parse(text); await inlineImages(anim, zip); text = JSON.stringify(anim); }
+      const id = p.split('/').pop().replace(/\.json$/i, '');
+      out.push([baseName(e.name) + (paths.length > 1 ? '-' + id : '') + '.min.json', new Blob([text], { type: 'application/json' })]);
+    }
+  }
+  return out;
+}
+$('#opt-batch-dl-json').addEventListener('click', async () => {
+  const key = batchKey(), ready = batch.filter(e => e.result && e.result.key === key);
+  setStatus($('#o-status'), 'Preparing the JSON files…');
+  try {
+    const files = await batchJsonFiles(ready), names = uniqueNames(files, f => f[0]);
+    await zipAndSave(files.map((f, i) => [names[i], f[1]]), `lottie-squeeze-${files.length}-json.zip`, $('#o-status'));
+  } catch (err) { setStatus($('#o-status'), "The JSON files couldn't be prepared: " + (err.message || err), 'warn'); }
+});
 
 /* --- MP4 tab --- */
 let vbatch = [], vActive = null, vConvertingAll = false;
@@ -2187,7 +2214,7 @@ function renderVBatch() {
   const ready = vbatch.filter(e => e.result && current(e.result));
   $('#v-batch-title').textContent = `${vbatch.length} videos · ${ready.length} converted`;
   $('#v-batch-all').disabled = vConvertingAll || ready.length === vbatch.length;
-  $('#v-batch-dl').disabled = vConvertingAll || !ready.length;
+  $('#v-batch-dl').disabled = $('#v-batch-dl-json').disabled = vConvertingAll || !ready.length;
   $('#v-batch-dl-size').textContent = ready.length ? fmtBytes(ready.reduce((n, e) => n + e.result.outBytes, 0)) : '';
 }
 async function addVideoFiles(files) {
@@ -2237,6 +2264,11 @@ $('#v-batch-all').addEventListener('click', async () => {
   vConvertingAll = false; renderVBatch();
   const done = vbatch.filter(e => e.result && e.result.key === videoKey()).length;
   setStatus($('#v-status'), `Converted ${done} of ${vbatch.length} videos with the same settings.`, done === vbatch.length ? 'ok' : 'warn');
+});
+$('#v-batch-dl-json').addEventListener('click', () => {
+  const key = videoKey(), ready = vbatch.filter(e => e.result && e.result.key === key);
+  const names = uniqueNames(ready, e => baseName(e.name) + '.json');
+  zipAndSave(ready.map((e, i) => [names[i], new Blob([e.result.text], { type: 'application/json' })]), `lottie-squeeze-${ready.length}-videos-json.zip`, $('#v-status'));
 });
 $('#v-batch-dl').addEventListener('click', () => {
   const key = videoKey(), ready = vbatch.filter(e => e.result && e.result.key === key);
